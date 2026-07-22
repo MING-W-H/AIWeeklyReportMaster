@@ -87,11 +87,6 @@ def resolve_output_path(config: Dict[str, Any]) -> Path:
     ext = ".md" if fmt == "markdown" else ".txt"
     if not file_name.lower().endswith((".md", ".txt", ".markdown")):
         file_name = file_name + ext
-
-    # 输出目录优先级：output_file 绝对路径 > output_folder > excel_folder 父目录
-    if config.get("output_file"):
-        return Path(config["output_file"])
-
     output_folder = config.get("output_folder", "reports")
     out_dir = Path(output_folder)
     # 相对路径时，基于脚本所在目录解析

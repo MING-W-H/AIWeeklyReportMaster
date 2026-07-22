@@ -119,7 +119,7 @@ python weekly_report.py
 
 将工时表 Excel 文件放入 `excel_files/` 文件夹（或其他你配置的路径）。
 
-Excel 文件应包含「任务名称」或「项目/需求任务」列（自动识别），也可以通过 `excel_task_column` 显式指定。
+Excel 文件应包含「任务名称」或「项目/需求任务」列（自动识别）
 
 ### 5. 生成周报
 
@@ -148,7 +148,6 @@ python weekly_report.py
   },
   "excel_folder": "./excel_files",
   "excel_extensions": [".xlsx", ".xls", ".xlsm"],
-  "excel_task_column": "",
   "output_format": "markdown",
   "output_file_template": "Vue{last_week_range}周报",
   "output_file": "",
@@ -160,7 +159,7 @@ python weekly_report.py
   "timeout": 180,
   "crm": {
     "enabled": false,
-    "url": "https://your-crm-host/ipd/rest/v1/workHourReport/integration/exportWorkHourItems",
+    "url": "https://crm.example.com/ipd/rest/v1/workHourReport/integration/exportWorkHourItems",
     "token": "",
     "userid": "",
     "tyinjectparams": "",
@@ -186,24 +185,24 @@ python weekly_report.py
 
 ### 字段说明
 
-| 字段 | 说明 | 默认值 |
-|---|---|---|
-| `provider` | 当前使用的 AI 服务商 | `minimax` |
-| `providers` | 各 AI 服务商的配置（详见下节） | - |
-| `excel_folder` | Excel 文件夹路径（绝对或相对路径） | `./excel_files` |
-| `excel_extensions` | 支持的 Excel 扩展名 | `[".xlsx", ".xls", ".xlsm"]` |
-| `excel_task_column` | 指定任务列名（留空则自动识别：任务名称 / 项目/需求任务 / 第一列） | `""` |
-| `output_format` | 输出格式：`markdown` / `plain` / `structured` / `bullet` / `custom` | `markdown` |
-| `output_file_template` | 输出文件名模板，支持日期占位符 | `Vue{last_week_range}周报` |
-| `output_file` | 若设置则直接使用该路径，覆盖 template | `""` |
-| `tokens_to_generate` | LLM 最大生成 token 数 | `4096` |
-| `temperature` | LLM 生成温度（0-1） | `0.3` |
-| `max_chars_per_sheet` | 单个 sheet 文本最大字符数 | `30000` |
-| `custom_prompt` | `output_format=custom` 时使用的提示词 | `""` |
-| `thinking_enabled` | 是否开启思考模式（DeepSeek/MiniMax 生效） | `false` |
-| `timeout` | API 请求超时时间（秒） | `180` |
-| `crm` | CRM 工时接口配置（详见下节） | - |
-| `email` | 邮件发送配置（详见下节） | - |
+| 字段                     | 说明                                                                          | 默认值                         |
+| ------------------------ | ----------------------------------------------------------------------------- | ------------------------------ |
+| `provider`             | 当前使用的 AI 服务商                                                          | `minimax`                    |
+| `providers`            | 各 AI 服务商的配置（详见下节）                                                | -                              |
+| `excel_folder`         | Excel 文件夹路径（绝对或相对路径）                                            | `./excel_files`              |
+| `excel_extensions`     | 支持的 Excel 扩展名                                                           | `[".xlsx", ".xls", ".xlsm"]` |
+| `excel_task_column`    | 指定任务列名（留空则自动识别：任务名称 / 项目/需求任务 / 第一列）             | `""`                         |
+| `output_format`        | 输出格式：`markdown` / `plain` / `structured` / `bullet` / `custom` | `markdown`                   |
+| `output_file_template` | 输出文件名模板，支持日期占位符                                                | `Vue{last_week_range}周报`   |
+| `output_file`          | 若设置则直接使用该路径，覆盖 template                                         | `""`                         |
+| `tokens_to_generate`   | LLM 最大生成 token 数                                                         | `4096`                       |
+| `temperature`          | LLM 生成温度（0-1）                                                           | `0.3`                        |
+| `max_chars_per_sheet`  | 单个 sheet 文本最大字符数                                                     | `30000`                      |
+| `custom_prompt`        | `output_format=custom` 时使用的提示词                                       | `""`                         |
+| `thinking_enabled`     | 是否开启思考模式（DeepSeek/MiniMax 生效）                                     | `false`                      |
+| `timeout`              | API 请求超时时间（秒）                                                        | `180`                        |
+| `crm`                  | CRM 工时接口配置（详见下节）                                                  | -                              |
+| `email`                | 邮件发送配置（详见下节）                                                      | -                              |
 
 ---
 
@@ -213,12 +212,12 @@ python weekly_report.py
 
 ### 支持的 Provider
 
-| Provider | 默认模型 | API 地址 | 思考模式 | 获取 API Key |
-|---|---|---|---|---|
-| `minimax` | `MiniMax-M3` | `api.minimaxi.com/v1/chat/completions` | 支持（adaptive） | [MiniMax 开放平台](https://platform.minimaxi.com/) |
-| `deepseek` | `deepseek-v4-flash` | `api.deepseek.com/chat/completions` | 支持（enabled） | [DeepSeek 开放平台](https://platform.deepseek.com/) |
-| `opencode` | `glm-5.2` | `opencode.ai/zen/v1/chat/completions` | 不支持 | [OpenCode Zen](https://opencode.ai/) |
-| `qwen` | `qwen3.8-max-preview` | `dashscope.aliyuncs.com/compatible-mode/v1/chat/completions` | 不支持 | [阿里云 DashScope](https://dashscope.console.aliyun.com/) |
+| Provider     | 默认模型                | API 地址                                                       | 思考模式         | 获取 API Key                                             |
+| ------------ | ----------------------- | -------------------------------------------------------------- | ---------------- | -------------------------------------------------------- |
+| `minimax`  | `MiniMax-M3`          | `api.minimaxi.com/v1/chat/completions`                       | 支持（adaptive） | [MiniMax 开放平台](https://platform.minimaxi.com/)        |
+| `deepseek` | `deepseek-v4-flash`   | `api.deepseek.com/chat/completions`                          | 支持（enabled）  | [DeepSeek 开放平台](https://platform.deepseek.com/)       |
+| `opencode` | `glm-5.2`             | `opencode.ai/zen/v1/chat/completions`                        | 不支持           | [OpenCode Zen](https://opencode.ai/)                      |
+| `qwen`     | `qwen3.8-max-preview` | `dashscope.aliyuncs.com/compatible-mode/v1/chat/completions` | 不支持           | [阿里云 DashScope](https://dashscope.console.aliyun.com/) |
 
 ### 切换 Provider
 
@@ -311,27 +310,27 @@ python weekly_report.py --provider opencode --model gpt-5.5
 
 ### CRM 配置字段说明
 
-| 字段 | 说明 | 示例 |
-|---|---|---|
-| `enabled` | 是否启用 CRM 接口下载 | `true` / `false` |
-| `url` | CRM 工时导出接口地址 | `https://your-crm-host/.../exportWorkHourItems` |
-| `token` | authorization 头中 `Bearer:` 后面的 JWT token | `eyJhbGciOiJIUzUxMiJ9...` |
-| `userid` | 请求头 userid 字段（CRM 用户 ID） | `YOUR_USER_ID` |
-| `tyinjectparams` | 请求头 tyinjectparams 字段（CRM 注入参数，可选） | `YOUR_INJECT_PARAMS_OR_EMPTY` |
-| `org_oid_list` | 组织 OID 列表 | `["YOUR_ORG_OID"]` |
-| `user_oid_list` | 用户 OID 列表（可选，留空表示查整个组织） | `[]` |
-| `project_oid_list` | 项目 OID 列表（可选，留空表示不限定项目） | `[]` |
-| `download_dir` | 下载保存目录（相对脚本目录或绝对路径） | `excel_files` |
-| `timeout` | CRM 接口请求超时（秒） | `60` |
+| 字段                 | 说明                                             | 示例                                              |
+| -------------------- | ------------------------------------------------ | ------------------------------------------------- |
+| `enabled`          | 是否启用 CRM 接口下载                            | `true` / `false`                              |
+| `url`              | CRM 工时导出接口地址                             | `https://your-crm-host/.../exportWorkHourItems` |
+| `token`            | authorization 头中`Bearer:` 后面的 JWT token   | `eyJhbGciOiJIUzUxMiJ9...`                       |
+| `userid`           | 请求头 userid 字段（CRM 用户 ID）                | `YOUR_USER_ID`                                  |
+| `tyinjectparams`   | 请求头 tyinjectparams 字段（CRM 注入参数，可选） | `YOUR_INJECT_PARAMS_OR_EMPTY`                   |
+| `org_oid_list`     | 组织 OID 列表                                    | `["YOUR_ORG_OID"]`                              |
+| `user_oid_list`    | 用户 OID 列表（可选，留空表示查整个组织）        | `[]`                                            |
+| `project_oid_list` | 项目 OID 列表（可选，留空表示不限定项目）        | `[]`                                            |
+| `download_dir`     | 下载保存目录（相对脚本目录或绝对路径）           | `excel_files`                                   |
+| `timeout`          | CRM 接口请求超时（秒）                           | `60`                                            |
 
 ### 日期范围计算
 
 启用 CRM 接口后，系统自动计算**上一周周一至周五**的日期范围：
 
-| 执行日 | 起始日期（周一） | 结束日期（周五） |
-|---|---|---|
-| 2026-07-22（周三） | 2026-07-13 | 2026-07-17 |
-| 2026-07-27（周一） | 2026-07-20 | 2026-07-24 |
+| 执行日             | 起始日期（周一） | 结束日期（周五） |
+| ------------------ | ---------------- | ---------------- |
+| 2026-07-22（周三） | 2026-07-13       | 2026-07-17       |
+| 2026-07-27（周一） | 2026-07-20       | 2026-07-24       |
 
 如需手动指定日期范围（如生成更早周期的周报）：
 
@@ -372,11 +371,13 @@ python weekly_report.py --no-crm
 **原因**：token 无效或已过期
 
 **解决方案**：
+
 1. 重新登录 CRM 系统
 2. 重新抓取 `exportWorkHourItems` 请求中的最新 token
 3. 更新 `config.json` 中的 `crm.token` 或环境变量 `CRM_TOKEN`
 
 > ⚠️ CRM token 通常有效期为 3 小时左右，定时任务运行时可能已过期。建议：
+>
 > - 短期方案：每周一执行前手动更新 token
 > - 长期方案：联系 CRM 管理员申请长期有效的 API token
 
@@ -443,28 +444,28 @@ python weekly_report.py --no-crm
 
 ### 邮件配置字段说明
 
-| 字段 | 说明 | 示例 |
-|---|---|---|
-| `enabled` | 是否启用邮件发送 | `true` / `false` |
-| `smtp_host` | 腾讯企业邮箱 SMTP 服务器，**不要修改** | `smtp.exmail.qq.com` |
-| `smtp_port` | SSL 端口，**不要修改** | `465` |
-| `sender` | 发件人邮箱（完整企业邮箱地址） | `zhangsan@company.com` |
-| `password` | **客户端专用密码**（16 位，不是登录密码！） | `abcdefghijklmnop` |
-| `recipients` | 收件人邮箱列表（数组） | `["a@xx.com", "b@yy.com"]` |
-| `cc` | 抄送列表（数组，可为空 `[]`） | `[]` 或 `["c@xx.com"]` |
-| `subject_template` | 邮件主题模板，支持日期占位符 | `"Vue 周报 {last_week_range}"` |
-| `attach_report` | 是否附上周报 `.md` 文件作为附件 | `true` / `false` |
+| 字段                 | 说明                                              | 示例                             |
+| -------------------- | ------------------------------------------------- | -------------------------------- |
+| `enabled`          | 是否启用邮件发送                                  | `true` / `false`             |
+| `smtp_host`        | 腾讯企业邮箱 SMTP 服务器，**不要修改**      | `smtp.exmail.qq.com`           |
+| `smtp_port`        | SSL 端口，**不要修改**                      | `465`                          |
+| `sender`           | 发件人邮箱（完整企业邮箱地址）                    | `zhangsan@company.com`         |
+| `password`         | **客户端专用密码**（16 位，不是登录密码！） | `abcdefghijklmnop`             |
+| `recipients`       | 收件人邮箱列表（数组）                            | `["a@xx.com", "b@yy.com"]`     |
+| `cc`               | 抄送列表（数组，可为空`[]`）                    | `[]` 或 `["c@xx.com"]`       |
+| `subject_template` | 邮件主题模板，支持日期占位符                      | `"Vue 周报 {last_week_range}"` |
+| `attach_report`    | 是否附上周报`.md` 文件作为附件                  | `true` / `false`             |
 
 ### 邮件主题占位符
 
 `subject_template` 支持以下占位符：
 
-| 占位符 | 含义 | 示例（周一执行） |
-|---|---|---|
+| 占位符                | 含义                           | 示例（周一执行）   |
+| --------------------- | ------------------------------ | ------------------ |
 | `{last_week_range}` | 上一周日期范围（同年省略年份） | `2026.7.13-7.19` |
-| `{last_week_start}` | 上一周周一日期 | `2026.7.13` |
-| `{last_week_end}` | 上一周周日日期 | `2026.7.19` |
-| `{date}` | 当前日期 | `2026.7.20` |
+| `{last_week_start}` | 上一周周一日期                 | `2026.7.13`      |
+| `{last_week_end}`   | 上一周周日日期                 | `2026.7.19`      |
+| `{date}`            | 当前日期                       | `2026.7.20`      |
 
 ### 邮箱密码环境变量（推荐）
 
@@ -512,6 +513,7 @@ cd C:\path\to\AIWeeklyReportMaster
 ```
 
 脚本会自动：
+
 - 删除同名的旧任务（若存在）
 - 注册每周一 10:00 触发的新任务
 - 使用当前登录用户身份运行（非 SYSTEM，确保能访问 Python 环境、API Key、邮箱密码）
@@ -538,13 +540,13 @@ Get-Content -Path "logs\*.log" -Tail 50
 
 #### 定时任务特性
 
-| 特性 | 说明 |
-|---|---|
-| 执行账户 | 当前用户（非 SYSTEM，确保能访问 Python 环境和凭据） |
-| 唤醒休眠 | 笔记本休眠也会被唤醒执行 |
-| 错过补执行 | 如果触发时电脑关机，开机会自动补执行 |
-| 超时保护 | 1 小时超时，防止卡死 |
-| 日志记录 | 每次执行写入 `logs/weekly_report_YYYYMMDD_HHMMSS.log` |
+| 特性       | 说明                                                   |
+| ---------- | ------------------------------------------------------ |
+| 执行账户   | 当前用户（非 SYSTEM，确保能访问 Python 环境和凭据）    |
+| 唤醒休眠   | 笔记本休眠也会被唤醒执行                               |
+| 错过补执行 | 如果触发时电脑关机，开机会自动补执行                   |
+| 超时保护   | 1 小时超时，防止卡死                                   |
+| 日志记录   | 每次执行写入`logs/weekly_report_YYYYMMDD_HHMMSS.log` |
 
 ### 节假日检查
 
@@ -601,22 +603,22 @@ HARDCODED_HOLIDAYS = {
 python weekly_report.py [OPTIONS]
 ```
 
-| 参数 | 说明 | 示例 |
-|---|---|---|
-| `--provider` | 选择 AI provider | `--provider deepseek` |
-| `--model` | 覆盖 provider 的 model 名称 | `--model deepseek-v4-pro` |
-| `--format` | 覆盖输出格式 | `--format bullet` |
-| `--output` | 指定输出文件路径 | `--output D:\report.md` |
-| `--output-folder` | 周报输出文件夹路径 | `--output-folder D:\reports` |
-| `--folder` | 指定 Excel 文件夹路径 | `--folder D:\excels` |
-| `--crm-start` | CRM 下载起始日期 (YYYY-MM-DD)，默认上一周周一 | `--crm-start 2026-07-06` |
-| `--crm-finish` | CRM 下载结束日期 (YYYY-MM-DD)，默认上一周周五 | `--crm-finish 2026-07-10` |
-| `--no-crm` | 跳过 CRM 接口下载，直接使用本地 Excel 文件 | - |
-| `--dry-run` | 仅汇总 Excel 内容并打印，不调用 API | - |
-| `--thinking` | 启用思考模式（DeepSeek/MiniMax 生效） | - |
-| `--debug` | 打印详细异常调用栈 | - |
-| `--no-email` | 跳过邮件发送（即使 `email.enabled=true`） | - |
-| `--force` | 强制执行，跳过节假日检查 | - |
+| 参数                | 说明                                          | 示例                           |
+| ------------------- | --------------------------------------------- | ------------------------------ |
+| `--provider`      | 选择 AI provider                              | `--provider deepseek`        |
+| `--model`         | 覆盖 provider 的 model 名称                   | `--model deepseek-v4-pro`    |
+| `--format`        | 覆盖输出格式                                  | `--format bullet`            |
+| `--output`        | 指定输出文件路径                              | `--output D:\report.md`      |
+| `--output-folder` | 周报输出文件夹路径                            | `--output-folder D:\reports` |
+| `--folder`        | 指定 Excel 文件夹路径                         | `--folder D:\excels`         |
+| `--crm-start`     | CRM 下载起始日期 (YYYY-MM-DD)，默认上一周周一 | `--crm-start 2026-07-06`     |
+| `--crm-finish`    | CRM 下载结束日期 (YYYY-MM-DD)，默认上一周周五 | `--crm-finish 2026-07-10`    |
+| `--no-crm`        | 跳过 CRM 接口下载，直接使用本地 Excel 文件    | -                              |
+| `--dry-run`       | 仅汇总 Excel 内容并打印，不调用 API           | -                              |
+| `--thinking`      | 启用思考模式（DeepSeek/MiniMax 生效）         | -                              |
+| `--debug`         | 打印详细异常调用栈                            | -                              |
+| `--no-email`      | 跳过邮件发送（即使`email.enabled=true`）    | -                              |
+| `--force`         | 强制执行，跳过节假日检查                      | -                              |
 
 ---
 
@@ -624,13 +626,13 @@ python weekly_report.py [OPTIONS]
 
 输出文件名通过 `output_file_template` 配置，支持以下占位符：
 
-| 占位符 | 含义 | 示例（周一 2026.7.20 执行） |
-|---|---|---|
-| `{date}` | 当前日期 | `2026.7.20` |
-| `{last_week_start}` | 上一周周一 | `2026.7.13` |
-| `{last_week_end}` | 上一周周日 | `2026.7.19` |
-| `{last_week_range}` | 上一周日期范围（同年省略年份） | `2026.7.13-7.19` |
-| `{last_week_full}` | 上一周日期范围（带完整年份） | `2026.7.13-2026.7.19` |
+| 占位符                | 含义                           | 示例（周一 2026.7.20 执行） |
+| --------------------- | ------------------------------ | --------------------------- |
+| `{date}`            | 当前日期                       | `2026.7.20`               |
+| `{last_week_start}` | 上一周周一                     | `2026.7.13`               |
+| `{last_week_end}`   | 上一周周日                     | `2026.7.19`               |
+| `{last_week_range}` | 上一周日期范围（同年省略年份） | `2026.7.13-7.19`          |
+| `{last_week_full}`  | 上一周日期范围（带完整年份）   | `2026.7.13-2026.7.19`     |
 
 ### 跨年处理
 
@@ -643,12 +645,12 @@ python weekly_report.py [OPTIONS]
 
 无论你哪一天执行，**总是返回上周周一到周日**的范围：
 
-| 执行日 | 上周一 | 上周日 |
-|---|---|---|
-| 周一(0) | today - 7 | today - 1 |
-| 周二(1) | today - 8 | today - 2 |
-| 周三(2) | today - 9 | today - 3 |
-| ... | ... | ... |
+| 执行日  | 上周一     | 上周日    |
+| ------- | ---------- | --------- |
+| 周一(0) | today - 7  | today - 1 |
+| 周二(1) | today - 8  | today - 2 |
+| 周三(2) | today - 9  | today - 3 |
+| ...     | ...        | ...       |
 | 周日(6) | today - 13 | today - 7 |
 
 ### 常用模板示例
@@ -762,6 +764,7 @@ python diagnose_email.py
 ```
 
 诊断脚本会：
+
 1. 检查密码长度、格式、空格
 2. 测试 SSL 端口 465 连接
 3. 测试 STARTTLS 端口 587 连接
@@ -774,13 +777,13 @@ python diagnose_email.py
 
 **最常见错误**，原因和解决方案：
 
-| 原因 | 解决方案 |
-|---|---|
+| 原因                                | 解决方案                                               |
+| ----------------------------------- | ------------------------------------------------------ |
 | **SMTP 服务未开启**（最常见） | 登录 Web 邮箱 → 设置 → 客户端 → 开启 IMAP/SMTP 服务 |
-| 使用了登录密码而非客户端专用密码 | 生成 16 位客户端专用密码 |
-| 客户端专用密码未真正生成成功 | 重新生成新密码，确保 16 位完整复制 |
-| 账号被风控（频繁失败触发） | 等待 30-60 分钟后再试 |
-| 密码复制错误（多了空格或换行） | 重新复制，注意 JSON 格式 |
+| 使用了登录密码而非客户端专用密码    | 生成 16 位客户端专用密码                               |
+| 客户端专用密码未真正生成成功        | 重新生成新密码，确保 16 位完整复制                     |
+| 账号被风控（频繁失败触发）          | 等待 30-60 分钟后再试                                  |
+| 密码复制错误（多了空格或换行）      | 重新复制，注意 JSON 格式                               |
 
 **关键**：`system busy` ≠ 密码错误，通常是服务端配置问题。重点检查 **Web 邮箱中的 SMTP 服务是否已开启**。
 
@@ -794,6 +797,7 @@ python diagnose_email.py
 **原因**：密码错误或使用了登录密码
 
 **解决方案**：
+
 1. 登录 `https://exmail.qq.com`
 2. 设置 → 客户端 → 客户端专用密码 → 生成新的专用密码
 3. 替换 `config.json` 中 `email.password` 字段
@@ -803,6 +807,7 @@ python diagnose_email.py
 **原因**：网络或防火墙问题
 
 **解决方案**：
+
 1. 检查网络连接是否正常
 2. 确认公司防火墙未拦截 465 端口
 3. 尝试切换网络（如手机热点）测试
@@ -835,6 +840,7 @@ python diagnose_email.py
 **原因**：默认 provider 是 minimax，但未配置 api_key
 
 **解决方案**：
+
 - 方式 1：在 `config.json` 的 `providers.minimax.api_key` 中填入 MiniMax API Key
 - 方式 2：切换到已配置 api_key 的 provider：`python weekly_report.py --provider deepseek`
 
@@ -843,6 +849,7 @@ python diagnose_email.py
 **原因**：Windows PowerShell 默认使用 GBK 编码
 
 **解决方案**：
+
 - 脚本已自动设置 UTF-8 输出，无需处理
 - 若仍有乱码，使用 **Windows Terminal** 替代旧版 PowerShell
 - 或运行前执行：`chcp 65001`
@@ -876,6 +883,7 @@ python diagnose_email.py
 **原因**：网络慢、思考模式生成时间长、生成内容较长
 
 **解决方案**：
+
 - 增大 `config.json` 中的 `timeout` 字段（默认 180 秒）
 - 或关闭思考模式：`python weekly_report.py`（不加 `--thinking`）
 
@@ -900,6 +908,7 @@ python diagnose_email.py
 ### Q10: 如何安全地管理 API Key 和邮箱密码
 
 **推荐做法**：
+
 1. 将 `config.json` 加入 `.gitignore`，避免提交到版本控制
 2. 使用环境变量注入敏感信息：
    ```powershell
@@ -934,20 +943,20 @@ register_weekly.ps1 (定时任务注册)
 
 ### 各模块职责
 
-| 模块 | 职责 | 主要函数 |
-|---|---|---|
-| [weekly_report.py](weekly_report.py) | 主入口、命令行参数、流程编排 | `main()`, `parse_args()` |
-| [config_manager.py](config_manager.py) | 配置定义、加载、合并、环境变量 | `load_config()` |
-| [crm_downloader.py](crm_downloader.py) | CRM 工时 Excel 接口下载、日期范围计算、文件名解码 | `download_workhour_excel()`, `calc_last_week_workdays()` |
-| [excel_aggregator.py](excel_aggregator.py) | Excel 文件扫描、任务列识别、跨文件去重 | `aggregate_excel_content()` |
-| [holiday_checker.py](holiday_checker.py) | 节假日检查（法定假日 + 调休 + 在线 API） | `is_holiday()`, `should_skip_execution()` |
-| [llm_client.py](llm_client.py) | LLM API 调用、prompt 构建、错误处理 | `call_llm_api()`, `build_prompt()` |
-| [text_utils.py](text_utils.py) | 对话前缀清理、Markdown 转 HTML | `strip_chat_prefix()`, `markdown_to_html()` |
-| [output_resolver.py](output_resolver.py) | 输出路径解析、日期范围计算 | `resolve_output_path()`, `calc_last_week_range()` |
-| [email_sender.py](email_sender.py) | 腾讯企业邮箱 SMTP 发送 | `send_report_email()` |
-| [diagnose_email.py](diagnose_email.py) | 邮件配置诊断 | `main()` |
-| [register_weekly.ps1](register_weekly.ps1) | 注册 Windows 定时任务（每周一 10:00） | - |
-| [run_weekly_report.bat](run_weekly_report.bat) | 定时任务启动脚本（激活 venv + 运行 Python） | - |
+| 模块                                          | 职责                                              | 主要函数                                                     |
+| --------------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------ |
+| [weekly_report.py](weekly_report.py)           | 主入口、命令行参数、流程编排                      | `main()`, `parse_args()`                                 |
+| [config_manager.py](config_manager.py)         | 配置定义、加载、合并、环境变量                    | `load_config()`                                            |
+| [crm_downloader.py](crm_downloader.py)         | CRM 工时 Excel 接口下载、日期范围计算、文件名解码 | `download_workhour_excel()`, `calc_last_week_workdays()` |
+| [excel_aggregator.py](excel_aggregator.py)     | Excel 文件扫描、任务列识别、跨文件去重            | `aggregate_excel_content()`                                |
+| [holiday_checker.py](holiday_checker.py)       | 节假日检查（法定假日 + 调休 + 在线 API）          | `is_holiday()`, `should_skip_execution()`                |
+| [llm_client.py](llm_client.py)                 | LLM API 调用、prompt 构建、错误处理               | `call_llm_api()`, `build_prompt()`                       |
+| [text_utils.py](text_utils.py)                 | 对话前缀清理、Markdown 转 HTML                    | `strip_chat_prefix()`, `markdown_to_html()`              |
+| [output_resolver.py](output_resolver.py)       | 输出路径解析、日期范围计算                        | `resolve_output_path()`, `calc_last_week_range()`        |
+| [email_sender.py](email_sender.py)             | 腾讯企业邮箱 SMTP 发送                            | `send_report_email()`                                      |
+| [diagnose_email.py](diagnose_email.py)         | 邮件配置诊断                                      | `main()`                                                   |
+| [register_weekly.ps1](register_weekly.ps1)     | 注册 Windows 定时任务（每周一 10:00）             | -                                                            |
+| [run_weekly_report.bat](run_weekly_report.bat) | 定时任务启动脚本（激活 venv + 运行 Python）       | -                                                            |
 
 ### 工作流程
 
@@ -1000,11 +1009,11 @@ register_weekly.ps1 (定时任务注册)
 
 ## 依赖
 
-| 依赖 | 用途 | 安装 |
-|---|---|---|
-| `pandas` | Excel 数据读取 | `pip install pandas` |
+| 依赖         | 用途                   | 安装                     |
+| ------------ | ---------------------- | ------------------------ |
+| `pandas`   | Excel 数据读取         | `pip install pandas`   |
 | `openpyxl` | `.xlsx` 文件解析引擎 | `pip install openpyxl` |
-| `requests` | HTTP 请求 LLM API | `pip install requests` |
+| `requests` | HTTP 请求 LLM API      | `pip install requests` |
 
 其他模块（`smtplib`、`email`、`argparse`、`json`、`re` 等）均为 Python 标准库，无需额外安装。
 

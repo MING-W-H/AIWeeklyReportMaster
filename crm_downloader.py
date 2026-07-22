@@ -102,7 +102,7 @@ def refresh_crm_token(config: Dict[str, Any]) -> str:
             "请在 config.json 中填入加密后的密码，或设置环境变量 CRM_PASSWORD"
         )
 
-    app_id = crm_cfg.get("app_id", f"Chrome(149.0.0.0)")
+    app_id = crm_cfg.get("app_id", "Chrome(149.0.0.0)")
     userid = crm_cfg.get("userid", "")
 
     headers = {
@@ -242,35 +242,6 @@ def cleanup_download_dir(
         except OSError as e:
             print(f"  [WARN] 删除旧文件失败 {item.name}: {e}")
     return removed
-
-
-# ============ 文件名解析 ============
-def _extract_filename_from_response(response: requests.Response) -> Optional[str]:
-    """从 Content-Disposition 头中解析文件名。"""
-    from urllib.parse import unquote
-
-    cd = response.headers.get("Content-Disposition", "")
-    if not cd:
-        return None
-    # 优先匹配 filename*=UTF-8''xxx (RFC 5987 格式)
-    m = re.search(r"filename\*=\s*[^']*''(.+?)(?:;|$)", cd, re.IGNORECASE)
-    if m:
-        return unquote(m.group(1).strip())
-    # 回退到 filename="xxx" 或 filename=xxx
-    m = re.search(r'filename\s*=\s*"?([^";]+)"?', cd, re.IGNORECASE)
-    if m:
-        name = m.group(1).strip()
-        # 部分服务器会将 URL 编码的文件名放在普通 filename 字段中（如 %E5%B7%A5...）
-        # 尝试 URL 解码，若解码后含中文则使用解码结果
-        try:
-            decoded = unquote(name)
-            if decoded != name:
-                name = decoded
-        except Exception:
-            pass
-        return name
-    return None
-
 
 # ============ 主下载函数 ============
 def download_workhour_excel(
@@ -500,11 +471,15 @@ def download_workhour_excel(
         or ""
     )
     if isinstance(file_b64, dict):
-        # 可能是 { filename: ..., content: ... } 结构
-        filename = file_b64.get("filename") or file_b64.get("name")
-        file_b64 = file_b64.get("content") or file_b64.get("data") or ""
+      # 可能是 { filename: ..., content: ... } 结构
+      filename = file_b64.get("filename") or file_b64.get("name")
+      file_b64 = file_b64.get("content") or file_b64.get("data") or ""
+      # 兜底：若没拿到 filename，用前面计算好的统一文件名
+      if not filename:
+        filename = f"可视化团队{range_label}.xlsx"
     else:
-        filename = None
+      # 非 dict 的 base64 字符串，filename 在前面 line 457 已设置
+      pass
 
     if isinstance(file_b64, str) and file_b64:
         try:
