@@ -1,0 +1,99 @@
+# ========================
+# 敏感信息（绝不提交！）
+# ========================
+# 用户配置文件（含 api_key、token、邮箱配置等明文敏感信息）
+config.json
+
+# 环境变量文件（含 CRM 账号密码、API Key、邮箱密码等所有密钥）
+.env
+.env.local
+.env.*.local
+
+# ========================
+# 生成产物
+# ========================
+# 生成的周报文件
+*周报.md
+*周报.txt
+Vue*.md
+Vue*.txt
+
+# 周报输出文件夹（默认）
+reports/
+reports/**
+
+# ========================
+# 数据文件（含工时表，可能含员工信息）
+# ========================
+excel_files/*.xlsx
+excel_files/*.xls
+excel_files/*.xlsm
+# 保留文件夹结构（加 .gitkeep）
+!excel_files/.gitkeep
+
+# ========================
+# Python
+# ========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 虚拟环境
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# ========================
+# IDE
+# ========================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ========================
+# 系统
+# ========================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ========================
+# 日志
+# ========================
+*.log
+logs/
+
+# ========================
+# 节假日缓存
+# ========================
+holidays_cache.json
+
+# ========================
+# 测试缓存
+# ========================
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/

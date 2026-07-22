@@ -1,0 +1,73 @@
+{
+  "provider": "minimax",
+  "providers": {
+    "minimax": {
+      "api_key": "",
+      "base_url": "https://api.minimaxi.com/v1/chat/completions",
+      "model": "MiniMax-M3",
+      "thinking_param": {"type": "adaptive"},
+      "max_tokens_field": "max_completion_tokens"
+    },
+    "deepseek": {
+      "api_key": "",
+      "base_url": "https://api.deepseek.com/chat/completions",
+      "model": "deepseek-v4-flash",
+      "thinking_param": {"type": "enabled"},
+      "max_tokens_field": "max_completion_tokens"
+    },
+    "opencode": {
+      "api_key": "",
+      "base_url": "https://opencode.ai/zen/v1/chat/completions",
+      "model": "glm-5.2",
+      "thinking_param": null,
+      "max_tokens_field": "max_tokens"
+    },
+    "qwen": {
+      "api_key": "",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+      "model": "qwen3.8-max-preview",
+      "thinking_param": null,
+      "max_tokens_field": "max_tokens"
+    }
+  },
+  "excel_folder": "./excel_files",
+  "excel_extensions": [".xlsx", ".xls", ".xlsm"],
+  "output_format": "markdown",
+  "output_folder": "reports",
+  "output_file_template": "Vue{last_week_range}周报",
+  "output_file": "",
+  "tokens_to_generate": 4096,
+  "temperature": 0.3,
+  "max_chars_per_sheet": 30000,
+  "custom_prompt": "",
+  "thinking_enabled": false,
+  "timeout": 180,
+  "crm": {
+    "enabled": false,
+    "url": "https://crm.example.com/ipd/rest/v1/workHourReport/integration/exportWorkHourItems",
+    "token": "",
+    "userid": "",
+    "tyinjectparams": "",
+    "org_oid_list": ["YOUR_ORG_OID_HERE"],
+    "user_oid_list": [],
+    "project_oid_list": [],
+    "download_dir": "excel_files",
+    "timeout": 60,
+    "login_url": "https://crm.example.com/rest/userService/v1/user/userLoginPlm",
+    "username": "",
+    "password": "",
+    "app_id": "Chrome(149.0.0.0)"
+  },
+  "email": {
+    "enabled": false,
+    "pull_from_env": true,
+    "smtp_host": "smtp.exmail.qq.com",
+    "smtp_port": 465,
+    "sender": "",
+    "password": "",
+    "recipients": [],
+    "cc": [],
+    "subject_template": "Vue 周报 {last_week_range}",
+    "attach_report": true
+  }
+}
