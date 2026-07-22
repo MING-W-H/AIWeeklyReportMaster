@@ -117,8 +117,10 @@ def markdown_to_html(md_text: str) -> str:
         elif stripped.startswith("# "):
             html_parts.append(f"<h1>{stripped[2:]}</h1>")
         # 列表
+        # 列表（应用加粗转换）
         elif stripped.startswith("- "):
-            html_parts.append(f"<li>{stripped[2:]}</li>")
+          bolded = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", stripped[2:])
+          html_parts.append(f"<li>{bolded}</li>")
         else:
             # 加粗 **text** → <strong>text</strong>
             bolded = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", stripped)
