@@ -1,0 +1,202 @@
+# -*- coding: utf-8 -*-
+"""钉钉 userId 查询工具（三种方式）。
+
+用途：钉钉机器人发送单聊消息需要接收人的 userId（staffId），
+本工具提供三种获取方式，用于填入 config.json：
+- dingtalk.approver_staff_ids（审核人）
+- dingtalk.recipient_staff_ids（周报接收人）
+
+使用方式：
+    0. 列出部门结构（先找目标部门 ID，需开通通讯录读权限）：
+       python dingtalk_userid.py --list-dept          # 根部门下的子部门
+       python dingtalk_userid.py --list-dept 872611   # 指定部门下的子部门
+
+    1. 一键查询部门内所有成员（默认根部门，需开通通讯录读权限）：
+       python dingtalk_userid.py --dept          # 根部门（全员）
+       python dingtalk_userid.py --dept 872611   # 指定部门 ID
+
+    2. 按手机号查询（需开通「根据手机号查询用户」权限）：
+       python dingtalk_userid.py --mobile 13800138000
+
+    3. 消息触发（默认，无需权限）：
+       python dingtalk_userid.py
+       然后在钉钉中搜索机器人名称，进入单聊发送任意消息，打印发送人 userId。
+"""
+import argparse
+import asyncio
+import logging
+import sys
+
+if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+from config_manager import load_config
+from dingtalk_confirmer import (
+    _get_credentials,
+    get_userid_by_mobile,
+    list_dept_members,
+    list_dept_subs,
+    _run_stream_listener,
+)
+
+try:
+    import dingtalk_stream
+    from dingtalk_stream import AckMessage
+    DINGTALK_STREAM_AVAILABLE = True
+except ImportError:
+    DINGTALK_STREAM_AVAILABLE = False
+
+
+class WhoamiHandler(dingtalk_stream.ChatbotHandler):
+
+    def __init__(self, logger: logging.Logger, done_event: asyncio.Event):
+        super().__init__()
+        self.logger = logger
+        self.done_event = done_event
+
+    async def process(self, callback: dingtalk_stream.CallbackMessage):
+        msg = dingtalk_stream.ChatbotMessage.from_dict(callback.data)
+        staff_id = getattr(msg, "sender_staff_id", "") or "(未获取到)"
+        nick = getattr(msg, "sender_nick", "") or "(未知)"
+        print()
+        print("=" * 60)
+        print("收到钉钉消息!")
+        print(f"  发送人昵称 : {nick}")
+        print(f"  发送人 userId: {staff_id}")
+        print("=" * 60)
+        print("请将上述 userId 填入 config.json 的 dingtalk.approver_staff_ids")
+        print("或 dingtalk.recipient_staff_ids 中。")
+        print()
+        # 不再向钉钉回复任何内容，避免与周报审核流程的 Stream 连接抢占消息
+        self.done_event.set()
+        return AckMessage.STATUS_OK, "OK"
+
+
+async def _run_stream(app_key: str, app_secret: str) -> None:
+    done_event = asyncio.Event()
+    logger = logging.getLogger("whoami")
+    logger.setLevel(logging.INFO)
+
+    handler = WhoamiHandler(logger, done_event)
+    credential = dingtalk_stream.Credential(app_key, app_secret)
+    client = dingtalk_stream.DingTalkStreamClient(credential)
+    client.register_callback_handler(
+        dingtalk_stream.chatbot.ChatbotMessage.TOPIC, handler
+    )
+    listener_task = asyncio.create_task(_run_stream_listener(client, done_event, 300))
+    try:
+        await asyncio.wait_for(done_event.wait(), timeout=300)
+    except asyncio.TimeoutError:
+        print("[INFO] 等待 5 分钟未收到消息，已退出。请重新运行后尽快发送消息。")
+    finally:
+        try:
+            if client.websocket is not None:
+                await client.websocket.close()
+        except Exception:
+            pass
+        listener_task.cancel()
+        try:
+            await listener_task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="钉钉 userId 查询工具")
+    parser.add_argument("--mobile", help="按手机号查询成员 userId")
+    parser.add_argument("--dept", nargs="?", const=1, type=int,
+                        help="列出指定部门成员（默认根部门=1），如 --dept 872611")
+    parser.add_argument("--list-dept", nargs="?", const=1, type=int,
+                        help="列出指定部门的子部门（默认根部门=1），如 --list-dept 872611")
+    args = parser.parse_args()
+
+    config = load_config()
+    dt_cfg = config.get("dingtalk", {})
+    try:
+        app_key, app_secret = _get_credentials(dt_cfg)
+    except ValueError as e:
+        print(f"[ERROR] {e}")
+        return 1
+
+    # 方式 0：列出子部门
+    if args.list_dept is not None:
+        try:
+            subs = list_dept_subs(config, args.list_dept)
+        except RuntimeError as e:
+            print(f"[ERROR] {e}")
+            return 2
+        if not subs:
+            print(f"[WARN] 部门 {args.list_dept} 下没有子部门")
+            return 0
+        print("=" * 60)
+        print(f"部门 {args.list_dept} 下的子部门（共 {len(subs)} 个）：")
+        print("=" * 60)
+        for d in subs:
+            print(f"  {d['id']}: {d['name']}")
+        print()
+        print("请使用 --dept <部门ID> 查询对应部门成员。")
+        return 0
+
+    # 方式 2：按手机号查询
+    if args.mobile:
+        try:
+            user_id = get_userid_by_mobile(config, args.mobile)
+        except RuntimeError as e:
+            print(f"[ERROR] {e}")
+            return 2
+        if not user_id:
+            print(f"[WARN] 未查询到手机号 {args.mobile} 对应的成员")
+            return 2
+        print("=" * 60)
+        print(f"手机号 {args.mobile} 对应的 userId: {user_id}")
+        print("=" * 60)
+        print("请将此 userId 填入 config.json 的 dingtalk.approver_staff_ids")
+        print("或 dingtalk.recipient_staff_ids 中。")
+        return 0
+
+    # 方式 3：按部门列出成员
+    if args.dept is not None:
+        try:
+            members = list_dept_members(config, args.dept)
+        except RuntimeError as e:
+            print(f"[ERROR] {e}")
+            return 2
+        if not members:
+            print(f"[WARN] 部门 {args.dept} 下未查询到成员")
+            return 0
+        print("=" * 60)
+        print(f"部门 {args.dept} 共 {len(members)} 名成员：")
+        print("=" * 60)
+        for m in members:
+            title = f"（{m['title']}）" if m["title"] else ""
+            print(f"  {m['name']}{title}: {m['userid']}")
+        print()
+        print("请将需要的 userId 填入 config.json 的钉钉配置中。")
+        return 0
+
+    # 方式 1（默认）：消息触发
+    if not DINGTALK_STREAM_AVAILABLE:
+        print("[ERROR] 未安装 dingtalk-stream，请先执行: pip install dingtalk-stream")
+        return 1
+
+    print("=" * 60)
+    print("钉钉 userId 查询工具（消息触发模式）")
+    print("=" * 60)
+    print("已启动 Stream 长连接，请执行以下操作：")
+    print("  1. 打开钉钉客户端")
+    print("  2. 顶部搜索您创建的机器人名称，进入单聊")
+    print("  3. 发送任意一条消息（如：我是谁）")
+    print("  4. 本程序将打印发送人 userId 并自动退出")
+    print("（5 分钟无消息自动退出）")
+    print()
+
+    asyncio.run(_run_stream(app_key, app_secret))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

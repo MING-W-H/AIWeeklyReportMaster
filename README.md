@@ -1,6 +1,6 @@
 # AI 周报生成器 (AIWeeklyReportMaster)
 
-一个基于 Python 的 AI 周报自动生成系统，支持通过 CRM 接口自动下载工时 Excel（或手动放置本地 Excel），去重汇总后调用大模型（MiniMax / DeepSeek / OpenCode / Qwen）生成结构化周报，并支持通过腾讯企业邮箱自动发送给指定人员。
+一个基于 Python 的 AI 周报自动生成系统，从 CRM 接口自动下载当周的单个工时 Excel，提取任务列内容去重汇总后调用大模型（MiniMax / DeepSeek / OpenCode / Qwen）生成结构化周报，经钉钉人工审核后通过钉钉和腾讯企业邮箱自动发送给指定人员。
 
 ---
 
@@ -16,6 +16,7 @@
 - [定时任务与节假日检查](#定时任务与节假日检查)
 - [命令行参数](#命令行参数)
 - [输出文件命名](#输出文件命名)
+- [运行日志](#运行日志)
 - [使用示例](#使用示例)
 - [邮件发送失败排查](#邮件发送失败排查)
 - [常见问题](#常见问题)
@@ -26,14 +27,15 @@
 ## 功能特性
 
 - **CRM 接口自动下载**：调用 CRM `exportWorkHourItems` 接口自动下载上一周工时 Excel，无需手动放置
-- **本地 Excel 兼容**：未启用 CRM 接口时仍支持手动放置 Excel 文件到 `excel_files/` 目录
-- **智能列识别**：自动识别 Excel 中的任务列（任务名称 / 项目/需求任务 / 第一列），适配 CRM 与手工两种格式
-- **智能去重**：提取任务列内容，跨文件自动去重
+- **本地 Excel 兼容**：未启用 CRM 接口时仍支持将单个 Excel 文件放置到 `excel_files/` 目录（取最新修改的一个文件）
+- **智能列识别**：自动识别 Excel 中的任务列（B 列任务名称 / D 列项目/需求 / H 列工作描述），适配 CRM 下载格式
+- **单文件去重**：提取 B/D/H 三列内容，单文件内自动去重
 - **多 AI Provider 支持**：内置 4 家大模型 API（MiniMax / DeepSeek / OpenCode / Qwen），可自由切换
 - **多种输出格式**：支持 Markdown / 纯文本 / 结构化 / 项目符号 / 自定义提示词
 - **智能输出清理**：自动移除 AI 输出中的对话式前缀、思考过程泄露、重复输出
 - **灵活的文件命名**：支持日期占位符（当前日期、上一周日期范围）
 - **腾讯企业邮箱**：生成周报后自动通过 SMTP SSL 发送邮件，支持收件人、抄送、附件
+- **完整运行日志**：全流程每一步骤（节假日检查 / CRM 下载 / Excel 汇总 / AI 生成 / 钉钉审核 / 发送）输出均留存，按周报名称保存为 `logs/` 下的 txt 文件，便于问题排查
 - **完善的错误处理**：HTTP 状态码细分（401/403/404/429/5xx）、超时分类、provider 切换建议
 - **Token 统计**：终端打印每次调用的 token 使用情况
 - **环境变量支持**：API Key、邮箱密码、CRM Token 均可通过环境变量注入，便于 CI/CD
@@ -49,11 +51,14 @@ AIWeeklyReportMaster/
 ├── weekly_report.py             # 主入口（命令行参数 + 流程编排）
 ├── config_manager.py            # 配置管理（默认配置 + 加载 + 合并）
 ├── crm_downloader.py            # CRM 工时 Excel 接口下载模块
-├── excel_aggregator.py          # Excel 读取与汇总（扫描 + 列识别 + 去重）
+├── excel_aggregator.py          # Excel 汇总（单文件列识别 + 去重）
 ├── llm_client.py                # LLM API 调用（prompt 构建 + HTTP 请求 + 错误处理）
 ├── text_utils.py                # 文本处理（前缀清理 + Markdown 转 HTML）
 ├── output_resolver.py           # 输出路径解析（日期范围计算 + 占位符替换）
 ├── email_sender.py              # 邮件发送（腾讯企业邮箱 SMTP）
+├── logger.py                    # 日志系统（全流程输出按周报名称写入 logs/）
+├── dingtalk_confirmer.py        # 钉钉人工审核 + 周报推送（Stream 模式）
+├── dingtalk_userid.py           # 钉钉 userId 查询工具（一键列出部门成员 userId）
 ├── holiday_checker.py           # 节假日检查（法定假日 + 调休 + 在线 API）
 ├── diagnose_email.py            # 邮件配置诊断脚本
 ├── register_weekly.ps1          # 定时任务注册脚本（每周一 10:00，PowerShell）
@@ -62,9 +67,9 @@ AIWeeklyReportMaster/
 ├── config.example.json          # 配置模板（提交到 git 供参考）
 ├── .env.example                 # 环境变量模板（提交到 git 供参考）
 ├── requirements.txt             # Python 依赖
-├── excel_files/                 # Excel 文件存放目录（CRM 下载目录 / 手工放置目录）
+├── excel_files/                 # Excel 文件存放目录（CRM 下载目录 / 手工放置目录，仅处理最新一个文件）
 ├── reports/                     # 周报输出目录（自动生成）
-├── logs/                        # 执行日志目录（自动生成）
+├── logs/                        # 运行日志目录（自动生成，按周报名称命名，如 Vue2026.7.13-7.19周报.txt）
 └── README.md                    # 本文档
 ```
 
@@ -96,7 +101,7 @@ python weekly_report.py
 - `provider` 选择的 AI 服务商的 `api_key`
 - 选择 Excel 数据来源：
   - **方式 A（推荐）**：启用 CRM 接口自动下载（填写 `crm` 段并设 `crm.enabled=true`）
-  - **方式 B**：手动放置 Excel 到 `excel_folder` 目录
+  - **方式 B**：手动放置单个 Excel 到 `excel_folder` 目录（取最新修改的一个文件）
 - （可选）`email` 段配置腾讯企业邮箱
 
 ### 4. 配置 Excel 数据来源
@@ -117,9 +122,9 @@ python weekly_report.py
 
 #### 方式 B：手动放置 Excel
 
-将工时表 Excel 文件放入 `excel_files/` 文件夹（或其他你配置的路径）。
+将工时表 Excel 文件放入 `excel_files/` 文件夹（或其他你配置的路径）。程序会**只处理最新修改的一个文件**，不做多文件拆分合并。
 
-Excel 文件应包含「任务名称」或「项目/需求任务」列（自动识别）
+Excel 文件应包含 B 列「任务名称」、D 列「项目/需求」、H 列「工作描述」（CRM 下载格式，自动识别）
 
 ### 5. 生成周报
 
@@ -189,9 +194,8 @@ python weekly_report.py
 | ------------------------ | ----------------------------------------------------------------------------- | ------------------------------ |
 | `provider`             | 当前使用的 AI 服务商                                                          | `minimax`                    |
 | `providers`            | 各 AI 服务商的配置（详见下节）                                                | -                              |
-| `excel_folder`         | Excel 文件夹路径（绝对或相对路径）                                            | `./excel_files`              |
+| `excel_folder`         | Excel 文件所在文件夹（绝对或相对路径），未启用 CRM 时取该目录最新修改的一个文件 | `./excel_files`              |
 | `excel_extensions`     | 支持的 Excel 扩展名                                                           | `[".xlsx", ".xls", ".xlsm"]` |
-| `excel_task_column`    | 指定任务列名（留空则自动识别：任务名称 / 项目/需求任务 / 第一列）             | `""`                         |
 | `output_format`        | 输出格式：`markdown` / `plain` / `structured` / `bullet` / `custom` | `markdown`                   |
 | `output_file_template` | 输出文件名模板，支持日期占位符                                                | `Vue{last_week_range}周报`   |
 | `output_file`          | 若设置则直接使用该路径，覆盖 template                                         | `""`                         |
@@ -495,6 +499,109 @@ python weekly_report.py --no-email
 
 ---
 
+## 钉钉人工审核配置
+
+AI 生成的周报内容未经审核直接发送存在风险。启用钉钉审核后，流程变为：
+
+1. AI 生成周报并保存到 `reports/` 目录
+2. 程序通过钉钉机器人向审核人单聊推送周报预览
+3. 审核人在手机/电脑钉钉上查看预览后回复「发送」或「取消」
+4. 程序通过 Stream 长连接实时接收回复：
+   - 「发送」→ 同时发送钉钉周报给接收人 + 发送周报邮件
+   - 「取消」→ 放弃发送（周报文件仍保留在 `reports/`）
+   - 超时未回复（默认 30 分钟）→ 自动放弃并通知审核人
+
+### 前提条件
+
+- 已在钉钉开发者后台创建**企业内部应用**机器人（注意：第三方个人应用不支持机器人能力）
+- 机器人消息接收模式选择 **Stream 模式**
+- 已开通权限：`qyapi_robot_sendmsg`（企业内机器人发送消息权限）
+- 事件订阅中订阅了「机器人消息接收」事件，推送方式为 Stream 模式
+
+### 配置步骤
+
+**1. 填写应用凭证（推荐放 `.env`）**
+
+```ini
+# .env 文件（已在 .gitignore 中忽略）
+DINGTALK_APP_KEY=dingxxxxxxxx
+DINGTALK_APP_SECRET=xxxxxxxx
+```
+
+> 凭证获取：钉钉开发者后台 → 应用 → 基础信息 → 凭证与基础信息（Client ID / Client Secret）
+
+**2. 启用钉钉并配置审核人/接收人**
+
+编辑 `config.json`：
+
+```json
+{
+  "dingtalk": {
+    "enabled": true,
+    "approver_staff_ids": ["你的钉钉userId"],
+    "recipient_staff_ids": ["接收人userId列表"],
+    "open_conversation_id": "",
+    "confirm_keywords": ["发送", "send", "确认", "ok"],
+    "cancel_keywords": ["取消", "cancel", "放弃", "不发送"],
+    "timeout_minutes": 30,
+    "preview_max_chars": 12000
+  }
+}
+```
+
+**3. 获取钉钉 userId**
+
+钉钉单聊推送需要接收人的 userId，运行查询工具：
+
+```bash
+# 一键查询部门内所有成员的 userId（默认根部门，可指定部门 ID）
+python dingtalk_userid.py --dept
+python dingtalk_userid.py --dept 872611
+
+# 或按手机号查询指定成员
+python dingtalk_userid.py --mobile 13800138000
+```
+
+把输出的 userId 填入 `approver_staff_ids` 和 `recipient_staff_ids`。
+
+> 也可以使用消息触发模式：`python dingtalk_userid.py` 后，在钉钉搜索机器人进入单聊发送任意消息，程序会打印你的 userId。
+
+### 钉钉配置字段说明
+
+| 字段                     | 类型     | 说明                                                        |
+| ------------------------ | -------- | ----------------------------------------------------------- |
+| `enabled`                | boolean  | 是否启用钉钉人工审核 + 推送                                  |
+| `app_key`                | string   | Client ID（建议放 `.env` 的 `DINGTALK_APP_KEY`）           |
+| `app_secret`             | string   | Client Secret（建议放 `.env` 的 `DINGTALK_APP_SECRET`）    |
+| `approver_staff_ids`     | string[] | 审核人 userId 列表（只有这些人回复有效）                     |
+| `recipient_staff_ids`    | string[] | 周报接收人 userId 列表（审核后单聊推送）                     |
+| `open_conversation_id`   | string   | 周报接收群的 openConversationId（群聊推送，可选）            |
+| `confirm_keywords`       | string[] | 确认发送关键词，默认 `["发送","send","确认","ok"]`         |
+| `cancel_keywords`        | string[] | 取消发送关键词，默认 `["取消","cancel","放弃","不发送"]`   |
+| `timeout_minutes`        | number   | 等待审核回复超时时间（分钟），默认 30                        |
+| `preview_max_chars`      | number   | 钉钉 Markdown 消息最大字符数，超出截断，默认 12000           |
+
+### 跳过人工审核
+
+如需紧急直接发送（跳过钉钉审核环节）：
+
+```bash
+python weekly_report.py --no-confirm
+```
+
+### 常见问题
+
+| 问题                              | 原因与解决                                                                                     |
+| --------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `获取钉钉 access_token 失败`    | 检查 `.env` 中 DINGTALK_APP_KEY / DINGTALK_APP_SECRET 是否正确                               |
+| 机器人收不到消息                | 检查事件订阅是否选择 Stream 模式、应用版本是否已发布上线                                       |
+| 发送单聊消息报权限错误          | 在开发者后台「权限管理」中确认已开通 `qyapi_robot_sendmsg` 权限                             |
+| `dingtalk.approver_staff_ids 未配置` | 先运行 `python dingtalk_userid.py --dept` 获取 userId 后填入配置                                 |
+| 搜索不到机器人                  | 确认应用已发布上线，且可用范围包含你自己                                                       |
+| `请求的部门id不在授权范围内`    | 开发者后台 → 应用 → **权限管理** → 找到通讯录权限（成员信息读权限等）→ 点击 **添加** → 将部门/人员加入**授权范围**（可选"全部员工"） |
+
+---
+
 ## 定时任务与节假日检查
 
 ### 定时任务
@@ -534,8 +641,8 @@ Start-ScheduledTask -TaskName "AIWeeklyReport"
 # 删除任务
 Unregister-ScheduledTask -TaskName "AIWeeklyReport" -Confirm:$false
 
-# 查看执行日志
-Get-Content -Path "logs\*.log" -Tail 50
+# 查看执行日志（与周报同名的 txt，按最后修改时间取最新）
+Get-ChildItem "logs\*.txt" | Sort-Object LastWriteTime -Descending | Select-Object -First 1 | Get-Content -Tail 50
 ```
 
 #### 定时任务特性
@@ -546,7 +653,7 @@ Get-Content -Path "logs\*.log" -Tail 50
 | 唤醒休眠   | 笔记本休眠也会被唤醒执行                               |
 | 错过补执行 | 如果触发时电脑关机，开机会自动补执行                   |
 | 超时保护   | 1 小时超时，防止卡死                                   |
-| 日志记录   | 每次执行写入`logs/weekly_report_YYYYMMDD_HHMMSS.log` |
+| 日志记录   | 每次执行仅生成一个日志文件`logs/{周报名称}.txt` |
 
 ### 节假日检查
 
@@ -618,6 +725,7 @@ python weekly_report.py [OPTIONS]
 | `--thinking`      | 启用思考模式（DeepSeek/MiniMax 生效）         | -                              |
 | `--debug`         | 打印详细异常调用栈                            | -                              |
 | `--no-email`      | 跳过邮件发送（即使`email.enabled=true`）    | -                              |
+| `--no-confirm`    | 跳过钉钉人工审核，生成后直接发送（钉钉+邮件） | -                              |
 | `--force`         | 强制执行，跳过节假日检查                      | -                              |
 
 ---
@@ -662,6 +770,32 @@ python weekly_report.py [OPTIONS]
 "output_file_template": "周报{last_week_full}"                    // 周报2026.7.13-2026.7.19.md
 "output_file_template": "Vue{date}周报"                           // 退回当天日期
 ```
+
+---
+
+## 运行日志
+
+每次运行 `weekly_report.py` 时，系统会自动初始化日志并**按周报名称**保存全流程输出到 `logs/` 目录（**一次任务仅生成一个 txt**）：
+
+```
+logs/Vue2026.7.27-8.2周报.txt        # 与周报同名的运行日志（唯一日志文件）
+```
+
+### 日志内容
+
+- 运行环境信息（时间、工作目录、Python 版本）
+- 全流程每一步骤输出：节假日检查 → CRM 下载 → Excel 汇总 → AI 生成 → 钉钉审核 → 钉钉推送 / 邮件发送
+- 所有错误、警告、异常堆栈（含 `--debug` 调试信息）
+- 控制台输出与日志文件内容完全一致（双写）
+
+### 日志级别
+
+- 默认记录 `INFO` 及以上级别
+- 使用 `--debug` 时记录 `DEBUG` 级别（含更详细的调试信息）
+
+### 隐私说明
+
+`logs/` 目录已加入 `.gitignore`，日志文件（含周报任务内容）不会提交到 GitHub。
 
 ---
 
@@ -872,7 +1006,7 @@ python diagnose_email.py
 
 **解决方案**：脚本已自动取最后一个顶层标题 `# ` 作为真正起点，丢弃草稿和思考过程
 
-### Q6: 周报中包含"本周工作覆盖 8 个 Excel 来源的 103 条原始记录"等元信息
+### Q6: 周报中包含"本周工作覆盖 N 条原始记录"等元信息
 
 **原因**：AI 引用了汇总过程中的元数据
 
@@ -926,15 +1060,17 @@ python diagnose_email.py
 ```
 weekly_report.py (主入口)
     ├── config_manager.py      (配置)
+    ├── logger.py              (日志系统：控制台 + logs/ txt)
     ├── crm_downloader.py      (CRM 接口下载 Excel)
     ├── excel_aggregator.py    (Excel 汇总)
     ├── holiday_checker.py     (节假日检查)
     ├── llm_client.py          (LLM 调用)
     │     └── text_utils.py    (文本清理)
-    ├── output_resolver.py     (输出路径)
-    └── email_sender.py        (邮件发送)
-          ├── output_resolver.py  (日期范围复用)
-          └── text_utils.py       (Markdown 转 HTML)
+    ├── output_resolver.py     (输出路径 + 日志命名)
+    ├── email_sender.py        (邮件发送)
+    │     ├── output_resolver.py  (日期范围复用)
+    │     └── text_utils.py       (Markdown 转 HTML)
+    └── dingtalk_confirmer.py  (钉钉人工审核 + 推送)
 
 register_weekly.ps1 (定时任务注册)
     └── run_weekly_report.bat (定时任务启动脚本)
@@ -948,12 +1084,15 @@ register_weekly.ps1 (定时任务注册)
 | [weekly_report.py](weekly_report.py)           | 主入口、命令行参数、流程编排                      | `main()`, `parse_args()`                                 |
 | [config_manager.py](config_manager.py)         | 配置定义、加载、合并、环境变量                    | `load_config()`                                            |
 | [crm_downloader.py](crm_downloader.py)         | CRM 工时 Excel 接口下载、日期范围计算、文件名解码 | `download_workhour_excel()`, `calc_last_week_workdays()` |
-| [excel_aggregator.py](excel_aggregator.py)     | Excel 文件扫描、任务列识别、跨文件去重            | `aggregate_excel_content()`                                |
+| [excel_aggregator.py](excel_aggregator.py)     | 单个 Excel 文件列识别（B/D/H）、单文件内去重    | `aggregate_excel_content()`                                |
 | [holiday_checker.py](holiday_checker.py)       | 节假日检查（法定假日 + 调休 + 在线 API）          | `is_holiday()`, `should_skip_execution()`                |
 | [llm_client.py](llm_client.py)                 | LLM API 调用、prompt 构建、错误处理               | `call_llm_api()`, `build_prompt()`                       |
 | [text_utils.py](text_utils.py)                 | 对话前缀清理、Markdown 转 HTML                    | `strip_chat_prefix()`, `markdown_to_html()`              |
 | [output_resolver.py](output_resolver.py)       | 输出路径解析、日期范围计算                        | `resolve_output_path()`, `calc_last_week_range()`        |
 | [email_sender.py](email_sender.py)             | 腾讯企业邮箱 SMTP 发送                            | `send_report_email()`                                      |
+| [logger.py](logger.py)                         | 日志系统：控制台 + 日志文件双输出，按周报名称写入 logs/ | `init_logging()`                                  |
+| [dingtalk_confirmer.py](dingtalk_confirmer.py) | 钉钉人工审核（Stream 长连接）+ 周报推送           | `wait_for_confirmation()`, `send_dingtalk_report()`     |
+| [dingtalk_userid.py](dingtalk_userid.py)       | 钉钉 userId 查询工具（部门成员 / 手机号 / 消息触发） | `main()`                                                   |
 | [diagnose_email.py](diagnose_email.py)         | 邮件配置诊断                                      | `main()`                                                   |
 | [register_weekly.ps1](register_weekly.ps1)     | 注册 Windows 定时任务（每周一 10:00）             | -                                                            |
 | [run_weekly_report.bat](run_weekly_report.bat) | 定时任务启动脚本（激活 venv + 运行 Python）       | -                                                            |
@@ -970,19 +1109,19 @@ register_weekly.ps1 (定时任务注册)
 │  Step 1: CRM 接口下载工时 Excel（启用 crm 时）               │
 │  ├─ 自动计算上一周周一至周五日期范围                          │
 │  ├─ 调用 CRM exportWorkHourItems 接口                       │
-│  ├─ 清理 excel_files/ 中的旧 Excel 文件                      │
+│  ├─ 清理日期范围重复的旧 Excel 文件                           │
 │  └─ 保存最新工时 Excel 到 download_dir                       │
 │      （未启用 CRM 时跳过此步，使用本地 Excel）                │
 ├─────────────────────────────────────────────────────────────┤
-│  Step 2: Python 读取 Excel 文件夹                            │
-│  ├─ 扫描 excel_files/ 下所有 .xlsx/.xls/.xlsm                │
-│  └─ 按文件名排序                                             │
+│  Step 2: 定位待处理 Excel 文件                                │
+│  ├─ CRM 下载结果 → 直接使用该文件                             │
+│  └─ 未启用 CRM → 取 excel_files/ 下最新修改的一个文件         │
 ├─────────────────────────────────────────────────────────────┤
-│  Step 3: Python 全量汇总为文本                                │
-│  ├─ 读取每个 Excel 的所有 sheet                               │
-│  ├─ 自动识别任务列（任务名称 / 项目/需求任务 / 第一列）        │
+│  Step 3: Python 汇总单个 Excel 为文本                         │
+│  ├─ 读取该 Excel 的所有 sheet                                 │
+│  ├─ 按列字母提取 B(任务名称) / D(项目/需求) / H(工作描述)     │
 │  ├─ 跳过表头、空值、纯数字序号、"总计/合计"行                  │
-│  ├─ 跨文件去重（保留首次出现顺序）                             │
+│  ├─ 单文件内去重（保留首次出现顺序）                           │
 │  └─ 拼接为编号列表格式的文本                                   │
 ├─────────────────────────────────────────────────────────────┤
 │  Step 4: AI 优化（调用 LLM API）                             │

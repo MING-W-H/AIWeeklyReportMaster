@@ -65,6 +65,25 @@ def calc_last_week_range(today: datetime) -> Dict[str, str]:
     }
 
 
+def render_template(template: str) -> str:
+    """替换文件名模板中的日期占位符，返回基础名称（不含扩展名）。
+
+    支持占位符：{date} / {last_week_start} / {last_week_end} / {last_week_range} / {last_week_full}
+    日志文件命名与周报输出命名共用此函数，保证两者一致。
+    """
+    today = datetime.now()
+    date_info = calc_last_week_range(today)
+
+    # 先替换长占位符，避免 {last_week_start} 被 {last_week} 误匹配
+    name = template
+    name = name.replace("{last_week_full}", date_info["last_week_full"])
+    name = name.replace("{last_week_range}", date_info["last_week_range"])
+    name = name.replace("{last_week_end}", date_info["last_week_end"])
+    name = name.replace("{last_week_start}", date_info["last_week_start"])
+    name = name.replace("{date}", date_info["date"])
+    return name
+
+
 def resolve_output_path(config: Dict[str, Any]) -> Path:
     """根据配置解析输出文件路径。"""
     fmt = config["output_format"]
@@ -72,17 +91,7 @@ def resolve_output_path(config: Dict[str, Any]) -> Path:
         return Path(config["output_file"])
 
     template = config.get("output_file_template") or "Vue{date}周报"
-
-    today = datetime.now()
-    date_info = calc_last_week_range(today)
-
-    # 替换占位符（先替换长占位符，避免 {last_week_start} 被 {last_week} 误匹配）
-    file_name = template
-    file_name = file_name.replace("{last_week_full}", date_info["last_week_full"])
-    file_name = file_name.replace("{last_week_range}", date_info["last_week_range"])
-    file_name = file_name.replace("{last_week_end}", date_info["last_week_end"])
-    file_name = file_name.replace("{last_week_start}", date_info["last_week_start"])
-    file_name = file_name.replace("{date}", date_info["date"])
+    file_name = render_template(template)
 
     ext = ".md" if fmt == "markdown" else ".txt"
     if not file_name.lower().endswith((".md", ".txt", ".markdown")):

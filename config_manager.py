@@ -99,6 +99,18 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "subject_template": "Vue 周报 {last_week_range}",  # 邮件主题模板
         "attach_report": True,                       # 是否将周报文件作为附件发送
     },
+    "dingtalk": {                                    # 钉钉人工审核 + 推送配置（企业内部应用机器人 Stream 模式）
+        "enabled": False,                            # 启用后 AI 生成周报需经审核人回复确认才发送
+        "app_key": "",                               # Client ID（建议放 .env: DINGTALK_APP_KEY）
+        "app_secret": "",                            # Client Secret（建议放 .env: DINGTALK_APP_SECRET）
+        "approver_staff_ids": [],                    # 审核人 userId 列表（运行 dingtalk_userid.py --dept 获取）
+        "recipient_staff_ids": [],                   # 周报钉钉接收人 userId 列表（单聊推送）
+        "open_conversation_id": "",                  # 周报钉钉接收群 openConversationId（群聊推送，可选）
+        "confirm_keywords": ["发送", "send", "确认", "ok"],   # 确认发送关键词
+        "cancel_keywords": ["取消", "cancel", "放弃", "不发送"],  # 取消发送关键词
+        "timeout_minutes": 30,                       # 等待审核回复超时时间（分钟）
+        "preview_max_chars": 12000,                  # 钉钉 Markdown 消息最大字符数（超出截断）
+    },
 }
 
 CONFIG_PATH = Path(__file__).parent / "config.json"
@@ -152,6 +164,11 @@ def load_config() -> Dict[str, Any]:
     config.setdefault("crm", {})
     for k, v in crm_default.items():
         config["crm"].setdefault(k, v)
+    # 确保 dingtalk 配置段存在且字段完整（兼容旧版配置升级）
+    dingtalk_default = DEFAULT_CONFIG.get("dingtalk", {})
+    config.setdefault("dingtalk", {})
+    for k, v in dingtalk_default.items():
+        config["dingtalk"].setdefault(k, v)
     # 环境变量覆盖 CRM 配置（便于 CI / 容器部署，避免明文存储）
     if os.getenv("CRM_TOKEN"):
         config["crm"]["token"] = os.environ["CRM_TOKEN"]
@@ -162,4 +179,9 @@ def load_config() -> Dict[str, Any]:
     # 环境变量覆盖邮箱密码（便于 CI / 容器部署）
     if os.getenv("EMAIL_PASSWORD"):
         config["email"]["password"] = os.environ["EMAIL_PASSWORD"]
+    # 环境变量覆盖钉钉凭证（敏感信息不写入 config.json）
+    if os.getenv("DINGTALK_APP_KEY"):
+        config["dingtalk"]["app_key"] = os.environ["DINGTALK_APP_KEY"]
+    if os.getenv("DINGTALK_APP_SECRET"):
+        config["dingtalk"]["app_secret"] = os.environ["DINGTALK_APP_SECRET"]
     return config
