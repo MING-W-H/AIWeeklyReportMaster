@@ -2,9 +2,9 @@
 """Excel 汇总模块。
 
 负责：
-- 扫描文件夹下所有 Excel 文件
-- 从每个 Excel 文件中提取 B 列「任务名称」、D 列「项目/需求」、H 列「工作描述」
-- 将三列内容按行合并为一条记录，跨文件去重
+- 处理 CRM 下载的单个 Excel 文件（不再扫描目录、不做跨文件合并）
+- 从该 Excel 中提取 B 列「任务名称」、D 列「项目/需求」、H 列「工作描述」
+- 将三列内容按行合并为一条记录，单文件内去重
 - 输出编号列表格式的汇总文本
 
 适配 CRM 下载的 Excel 列结构：
@@ -175,40 +175,52 @@ def collect_tasks_from_excel(file_path: Path) -> List[str]:
     return records
 
 
-def aggregate_excel_content(config: Dict[str, Any]) -> str:
-    """汇总文件夹下所有 Excel 文件的 B/D/H 三列内容。
+def aggregate_excel_content(config: Dict[str, Any],
+                            excel_file: Optional[Path] = None) -> str:
+    """汇总单个 Excel 文件的 B/D/H 三列内容（不做跨文件合并）。
+
+    Args:
+        config: 全局配置字典
+        excel_file: 指定要处理的 Excel 文件路径（CRM 下载的文件）。
+            未指定时（--no-crm 或 CRM 未启用），从 excel_folder 目录中
+            取最新修改的一个 Excel 文件。
 
     流程：
-        Python 读取所有 Excel → 提取 B(任务名称)/D(项目/需求)/H(工作描述) 三列
-        → 按行合并 → 跨文件去重 → 交由 AI 优化。
+        Python 读取该 Excel → 提取 B(任务名称)/D(项目/需求)/H(工作描述) 三列
+        → 按行合并 → 单文件内去重 → 交由 AI 优化。
     """
-    files = collect_excel_files(config["excel_folder"], config["excel_extensions"])
-    if not files:
-        raise FileNotFoundError(
-            f"文件夹 {config['excel_folder']} 下未找到 Excel 文件 (扩展名: {config['excel_extensions']})"
-        )
+    # 优先使用传入的单个文件（CRM 下载结果）；否则从目录取最新文件兜底
+    if excel_file is not None:
+        path = Path(excel_file)
+        if not path.is_file():
+            raise FileNotFoundError(f"Excel 文件不存在: {path}")
+        files: List[Path] = [path]
+    else:
+        files = collect_excel_files(config["excel_folder"], config["excel_extensions"])
+        if not files:
+            raise FileNotFoundError(
+                f"文件夹 {config['excel_folder']} 下未找到 Excel 文件 (扩展名: {config['excel_extensions']})"
+            )
+        # 只取最新修改的一个文件，不做多文件合并
+        files = [max(files, key=lambda p: p.stat().st_mtime)]
 
-    print(f"[INFO] 共发现 {len(files)} 个 Excel 文件:")
-    for f in files:
-        print(f"  - {f.name}")
+    print(f"[INFO] 处理 Excel 文件: {files[0].name}")
 
+    records = collect_tasks_from_excel(files[0])
+    # 单文件内去重（保留首次出现的顺序）
     seen = set()
     unique_tasks: List[str] = []
-    total_raw = 0
-    for f in files:
-        records = collect_tasks_from_excel(f)
-        total_raw += len(records)
-        for record in records:
-            if record not in seen:
-                seen.add(record)
-                unique_tasks.append(record)
+    for record in records:
+        if record not in seen:
+            seen.add(record)
+            unique_tasks.append(record)
 
-    print(f"[INFO] B/D/H 三列合并记录原始条目数: {total_raw}，去重后剩余: {len(unique_tasks)}")
+    print(f"[INFO] B/D/H 三列合并记录原始条目数: {len(records)}，去重后剩余: {len(unique_tasks)}")
 
     # 注意：以下过程性元信息仅用于 Python 端控制台日志，不写入汇总文本
     # 以免 AI 在周报中引用"来源文件数/条目数/去重后条目数"等数据汇总过程信息
     lines: List[str] = []
-    lines.append("以下为本周所有 Excel 中 B 列任务名称、D 列项目/需求、H 列工作描述的去重汇总列表：")
+    lines.append("以下为本 Excel 中 B 列任务名称、D 列项目/需求、H 列工作描述的去重汇总列表：")
     lines.append("")
     for idx, task in enumerate(unique_tasks, start=1):
         lines.append(f"{idx}. {task}")

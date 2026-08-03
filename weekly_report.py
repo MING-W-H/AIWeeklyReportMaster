@@ -2,8 +2,9 @@
 """
 AI 周报生成器 - 多 LLM Provider 支持（MiniMax / DeepSeek / OpenCode / Qwen）
 
-读取指定文件夹中所有 Excel 文件第一列「项目/需求任务」内容，去重后交由 AI 总结整理，
-返回一段可设置格式的周报文本，并可选通过腾讯企业邮箱发送。
+处理 CRM 下载的单个工时 Excel（或本地 excel_folder 目录中最新修改的一个文件），
+提取 B(任务名称)/D(项目/需求)/H(工作描述) 三列内容，单文件内去重后交由 AI 总结整理，
+返回一段可设置格式的周报文本，经钉钉人工审核后通过钉钉和腾讯企业邮箱发送。
 
 支持四种 AI Provider（均使用 OpenAI 兼容接口）：
     - minimax : MiniMax M3 模型 (https://api.minimaxi.com/v1/chat/completions)
@@ -19,9 +20,12 @@ AI 周报生成器 - 多 LLM Provider 支持（MiniMax / DeepSeek / OpenCode / Q
     5. python weekly_report.py --no-email                    # 跳过邮件发送
 """
 import argparse
+import logging
+import os
 import sys
 import traceback
 import warnings
+from pathlib import Path
 
 # 强制 stdout/stderr 使用 UTF-8 编码，避免 Windows PowerShell 中文乱码
 if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
@@ -36,11 +40,57 @@ warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
 
 from config_manager import PROVIDER_PRESETS, load_config
 from crm_downloader import download_workhour_excel
+from dingtalk_confirmer import send_dingtalk_report, wait_for_confirmation
 from email_sender import send_report_email
 from excel_aggregator import aggregate_excel_content
 from holiday_checker import should_skip_execution
 from llm_client import FORMAT_TEMPLATES, build_prompt, call_llm_api
-from output_resolver import resolve_output_path
+from logger import init_logging
+from output_resolver import render_template, resolve_output_path
+
+
+LOCK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".weekly_report.lock")
+
+
+def _acquire_lock() -> bool:
+    """单实例锁：防止多个进程同时运行导致钉钉 Stream 连接互相抢占。
+
+    锁文件记录运行中进程的 PID；若 PID 仍存活则拒绝启动。
+    进程正常退出时由 finally 释放，异常退出时 PID 已死、下次运行自动接管。
+    返回 True 表示成功获取锁（或锁初始化失败但不影响运行）。
+    """
+    try:
+        if os.path.exists(LOCK_FILE):
+            with open(LOCK_FILE, "r", encoding="utf-8") as f:
+                old_pid = int(f.read().strip() or "0")
+            if old_pid and _pid_alive(old_pid):
+                print(f"[ERROR] 已有周报进程 (PID {old_pid}) 正在运行，请勿重复启动。")
+                print("[INFO] 若确认该进程已结束，请删除文件: .weekly_report.lock 后重试")
+                return False
+        with open(LOCK_FILE, "w", encoding="utf-8") as f:
+            f.write(str(os.getpid()))
+    except (OSError, ValueError) as e:
+        print(f"[WARN] 单实例锁初始化失败（不影响运行）: {e}")
+    return True
+
+
+def _release_lock() -> None:
+    try:
+        if os.path.exists(LOCK_FILE):
+            os.remove(LOCK_FILE)
+    except OSError:
+        pass
+
+
+def _pid_alive(pid: int) -> bool:
+    """检查进程是否存活（跨平台）。"""
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    except Exception:
+        return False
+    return True
 
 
 def parse_args() -> argparse.Namespace:
@@ -65,6 +115,8 @@ def parse_args() -> argparse.Namespace:
                         help="打印详细异常调用栈")
     parser.add_argument("--no-email", action="store_true",
                         help="跳过邮件发送（即使 config.json 中 email.enabled=true）")
+    parser.add_argument("--no-confirm", action="store_true",
+                        help="跳过钉钉人工审核，AI 生成后直接发送（钉钉+邮件）")
     parser.add_argument("--force", action="store_true",
                         help="强制执行，跳过节假日检查（节假日也会执行）")
     return parser.parse_args()
@@ -72,14 +124,32 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    if not _acquire_lock():
+        return 1
+    try:
+        return _run(args)
+    finally:
+        _release_lock()
+
+
+def _run(args: argparse.Namespace) -> int:
     config = load_config()
 
-    # 0. 节假日检查：节假日/周末跳过执行（定时任务在周一运行，但周一可能是法定节假日）
+    # 0. 初始化日志系统：日志文件按「周报名称」命名，保存到 logs/ 目录（全流程输出均写入）
+    if config.get("output_file"):
+        run_label = Path(config["output_file"]).stem
+    else:
+        run_label = render_template(config.get("output_file_template") or "Vue{date}周报")
+    log_path = init_logging(run_label, debug=args.debug)
+    print(f"[INFO] 运行日志已保存至: {log_path}")
+
+    # 1. 节假日检查：节假日/周末跳过执行（定时任务在周一运行，但周一可能是法定节假日）
     if not args.force:
         should_skip, reason = should_skip_execution()
         if should_skip:
             print(f"[INFO] {reason}")
             print("[INFO] 如需强制执行，请使用: python weekly_report.py --force")
+            print(f"[INFO] 运行日志: {log_path}")
             return 0
 
     if args.provider:
@@ -124,9 +194,9 @@ def main() -> int:
     elif not crm_cfg.get("enabled"):
         print("[INFO] CRM 接口未启用，使用本地 excel_folder 下的 Excel 文件")
 
-    # 2. 汇总 Excel 内容
+    # 2. 汇总 Excel 内容（仅处理 CRM 下载的单个文件；未下载时取目录最新文件兜底）
     try:
-        excel_text = aggregate_excel_content(config)
+        excel_text = aggregate_excel_content(config, downloaded_excel_path)
     except FileNotFoundError as e:
         print(f"[ERROR] {e}")
         return 1
@@ -188,7 +258,39 @@ def main() -> int:
     out_path.write_text(report_text, encoding="utf-8")
     print(f"\n[INFO] 周报已保存至: {out_path.absolute()}")
 
-    # 6. 发送邮件（周报保存成功后）
+    # 6. 钉钉人工审核（启用时：推送预览给审核人，等待回复「发送/取消」）
+    dt_cfg = config.get("dingtalk", {})
+    need_confirm = dt_cfg.get("enabled", False) and not args.no_confirm
+    if need_confirm:
+        try:
+            decision, reason = wait_for_confirmation(report_text, out_path.name, config)
+        except ValueError as e:
+            print(f"[ERROR] 钉钉配置错误: {e}")
+            return 4
+        except RuntimeError as e:
+            print(f"[ERROR] 钉钉审核流程异常: {e}")
+            if args.debug:
+                traceback.print_exc()
+            return 4
+        print(f"[INFO] 钉钉审核结果: {decision}（{reason}）")
+        if decision != "confirm":
+            print("[INFO] 未获得审核确认，跳过钉钉推送与邮件发送。")
+            return 0
+
+    # 7. 发送钉钉周报（审核通过后推送给钉钉接收人）
+    if dt_cfg.get("enabled") and (not need_confirm or decision == "confirm"):
+        try:
+            send_dingtalk_report(report_text, out_path.name, config)
+        except ValueError as e:
+            print(f"[ERROR] 钉钉配置错误: {e}")
+            return 4
+        except RuntimeError as e:
+            print(f"[ERROR] 钉钉周报发送失败: {e}")
+            if args.debug:
+                traceback.print_exc()
+            return 4
+
+    # 8. 发送邮件（审核通过后，或钉钉审核未启用时）
     if not args.no_email and config.get("email", {}).get("enabled"):
         try:
             send_report_email(report_text, out_path, config, downloaded_excel_path)
@@ -203,6 +305,7 @@ def main() -> int:
     elif args.no_email:
         print("[INFO] 已跳过邮件发送（--no-email）")
 
+    print(f"[INFO] 全流程执行结束，运行日志: {log_path}")
     return 0
 
 
