@@ -19,6 +19,8 @@ AI 周报生成器 - 多 LLM Provider 支持（MiniMax / DeepSeek / OpenCode / Q
     4. python weekly_report.py --provider opencode --thinking  # 启用思考模式
     5. python weekly_report.py --no-email                    # 跳过邮件发送
 """
+from __future__ import annotations
+
 import argparse
 import logging
 import os
@@ -26,6 +28,7 @@ import sys
 import traceback
 import warnings
 from pathlib import Path
+from typing import Optional
 
 # 强制 stdout/stderr 使用 UTF-8 编码，避免 Windows PowerShell 中文乱码
 if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
@@ -40,7 +43,7 @@ warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
 
 from config_manager import PROVIDER_PRESETS, load_config
 from crm_downloader import download_workhour_excel
-from dingtalk_confirmer import send_dingtalk_report, wait_for_confirmation
+from dingtalk_confirmer import send_dingtalk_report, send_failure_alert, wait_for_confirmation
 from email_sender import send_report_email
 from excel_aggregator import aggregate_excel_content
 from holiday_checker import should_skip_execution
@@ -50,6 +53,16 @@ from output_resolver import render_template, resolve_output_path
 
 
 LOCK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".weekly_report.lock")
+
+
+class ErrorCode:
+    """统一的错误码常量"""
+    SUCCESS = 0
+    LOCK_FAILED = 10
+    CRM_ERROR = 1
+    LLM_ERROR = 2
+    EMAIL_ERROR = 3
+    DINGTALK_ERROR = 4
 
 
 def _acquire_lock() -> bool:
@@ -122,36 +135,8 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> int:
-    args = parse_args()
-    if not _acquire_lock():
-        return 1
-    try:
-        return _run(args)
-    finally:
-        _release_lock()
-
-
-def _run(args: argparse.Namespace) -> int:
-    config = load_config()
-
-    # 0. 初始化日志系统：日志文件按「周报名称」命名，保存到 logs/ 目录（全流程输出均写入）
-    if config.get("output_file"):
-        run_label = Path(config["output_file"]).stem
-    else:
-        run_label = render_template(config.get("output_file_template") or "Vue{date}周报")
-    log_path = init_logging(run_label, debug=args.debug)
-    print(f"[INFO] 运行日志已保存至: {log_path}")
-
-    # 1. 节假日检查：节假日/周末跳过执行（定时任务在周一运行，但周一可能是法定节假日）
-    if not args.force:
-        should_skip, reason = should_skip_execution()
-        if should_skip:
-            print(f"[INFO] {reason}")
-            print("[INFO] 如需强制执行，请使用: python weekly_report.py --force")
-            print(f"[INFO] 运行日志: {log_path}")
-            return 0
-
+def apply_args_to_config(args: argparse.Namespace, config: dict) -> None:
+    """将命令行参数覆盖到配置字典中"""
     if args.provider:
         config["provider"] = args.provider
     if args.model:
@@ -167,146 +152,291 @@ def _run(args: argparse.Namespace) -> int:
     if args.thinking:
         config["thinking_enabled"] = True
 
-    # 1. CRM 接口下载工时 Excel（启用 CRM 时自动下载，跳过手动放置）
+
+def init_run_logging(config: dict, debug: bool):
+    """初始化日志系统，返回日志文件路径"""
+    if config.get("output_file"):
+        run_label = Path(config["output_file"]).stem
+    else:
+        run_label = render_template(config.get("output_file_template") or "Vue{date}周报")
+    log_path = init_logging(run_label, debug=debug)
+    print(f"[INFO] 运行日志已保存至: {log_path}")
+    return log_path
+
+
+def check_holiday_skip(force: bool, log_path) -> Optional[int]:
+    """检查是否应该跳过执行（节假日/周末）
+
+    Returns:
+        错误码（0 表示跳过执行，应直接返回）或 None（继续执行）
+    """
+    if force:
+        return None
+    should_skip, reason = should_skip_execution()
+    if should_skip:
+        print(f"[INFO] {reason}")
+        print("[INFO] 如需强制执行，请使用: python weekly_report.py --force")
+        print(f"[INFO] 运行日志: {log_path}")
+        return ErrorCode.SUCCESS
+    return None
+
+
+def download_crm_if_enabled(
+    config: dict, args: argparse.Namespace
+) -> tuple[Optional[str], Optional[int]]:
+    """根据配置和参数决定是否下载 CRM 工时 Excel
+
+    Returns:
+        (downloaded_path, error_code): 成功返回路径和 None，失败返回 None 和错误码
+    """
     crm_cfg = config.get("crm", {})
-    downloaded_excel_path = None
-    if crm_cfg.get("enabled") and not args.no_crm:
+    if not crm_cfg.get("enabled") or args.no_crm:
+        if args.no_crm:
+            print("[INFO] 已跳过 CRM 接口下载（--no-crm），使用本地 Excel 文件")
+        else:
+            print("[INFO] CRM 接口未启用，使用本地 excel_folder 下的 Excel 文件")
+        return None, None
+
+    try:
+        print("\n" + "=" * 60)
+        print("步骤 1/3: 从 CRM 接口下载工时 Excel")
+        print("=" * 60)
+        downloaded_path = download_workhour_excel(
+            config,
+            start_date=args.crm_start,
+            finish_date=args.crm_finish,
+        )
+        return downloaded_path, None
+    except ValueError as e:
+        print(f"[ERROR] CRM 配置错误: {e}")
+        return None, ErrorCode.CRM_ERROR
+    except RuntimeError as e:
+        print(f"[ERROR] CRM 接口下载失败: {e}")
+        send_failure_alert(config, f"CRM 下载失败: {e}")
+        if args.debug:
+            traceback.print_exc()
+        print("[INFO] 可使用 --no-crm 跳过下载，直接使用本地 Excel 文件")
+        return None, ErrorCode.CRM_ERROR
+
+
+def generate_report_via_llm(
+    prompt: str, config: dict, debug: bool
+) -> tuple[Optional[str], Optional[int]]:
+    """调用 LLM API 生成周报（支持 provider 自动降级）
+
+    Returns:
+        (report_text, error_code): 成功返回周报文本和 None，失败返回 None 和错误码
+    """
+    providers = config.get("providers", {})
+    current_provider = config["provider"]
+    # 构建降级顺序：当前 provider 优先，其余已配置 api_key 的 provider 按序
+    fallback_order = [current_provider] + [
+        p for p in providers
+        if p != current_provider and providers[p].get("api_key", "").strip()
+    ]
+    report_text = None
+    last_error = None
+    for idx, provider_name in enumerate(fallback_order):
         try:
-            print("\n" + "=" * 60)
-            print("步骤 1/3: 从 CRM 接口下载工时 Excel")
-            print("=" * 60)
-            downloaded_excel_path = download_workhour_excel(
-                config,
-                start_date=args.crm_start,
-                finish_date=args.crm_finish,
-            )
+            config["provider"] = provider_name
+            report_text = call_llm_api(prompt, config)
+            break  # 成功后跳出
         except ValueError as e:
-            print(f"[ERROR] CRM 配置错误: {e}")
-            return 1
+            # 配置类错误（如 api_key 缺失、provider 未知）
+            print(f"[ERROR] {provider_name} 配置错误: {e}")
+            if idx < len(fallback_order) - 1:
+                print(f"[INFO] 尝试切换到下一个 provider: {fallback_order[idx + 1]}")
+                continue
+            # 最后一个 provider 也配置错误
+            return None, ErrorCode.LLM_ERROR
         except RuntimeError as e:
-            print(f"[ERROR] CRM 接口下载失败: {e}")
+            print(f"[WARN] {provider_name} 调用失败: {e}")
+            last_error = e
+            if idx < len(fallback_order) - 1:
+                print(f"[INFO] 尝试切换到下一个 provider: {fallback_order[idx + 1]}")
+                continue
+            break  # 所有 provider 都失败
+        except Exception as e:
+            print(f"[ERROR] {provider_name} 未知异常: {e}")
+            last_error = e
+            if idx < len(fallback_order) - 1:
+                continue
+            break
+
+    if report_text is None:
+        print("[ERROR] 所有 provider 均失败，无法生成周报")
+        error_msg = str(last_error or "未知错误")
+        print(f"[ERROR] 最后一次错误: {error_msg}")
+        # 自动发送失败告警
+        send_failure_alert(config, f"AI 接口调用失败: {error_msg}")
+        if debug:
+            traceback.print_exc()
+        return None, ErrorCode.LLM_ERROR
+
+    return report_text, None
+
+
+def save_report_to_file(report_text: str, config: dict) -> Path:
+    """保存周报到文件并打印，返回输出路径"""
+    out_path = resolve_output_path(config)
+    print("\n" + "=" * 60)
+    print("生成的周报内容：")
+    print("=" * 60)
+    print(report_text)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(report_text, encoding="utf-8")
+    print(f"\n[INFO] 周报已保存至: {out_path.absolute()}")
+    return out_path
+
+
+def handle_dingtalk_review(
+    report_text: str, out_path: Path, config: dict, args: argparse.Namespace
+) -> tuple[bool, Optional[int]]:
+    """处理钉钉人工审核与推送
+
+    Returns:
+        (should_continue, error_code):
+            should_continue=True 表示审核通过或无需审核，可继续后续步骤；
+            should_continue=False 表示应终止流程（跳过或出错）。
+            error_code 非 None 时表示出错应返回该码。
+    """
+    dt_cfg = config.get("dingtalk", {})
+    need_confirm = dt_cfg.get("enabled", False) and not args.no_confirm
+
+    # 钉钉人工审核
+    if need_confirm:
+        try:
+            decision, reason = wait_for_confirmation(report_text, out_path.name, config)
+        except ValueError as e:
+            print(f"[ERROR] 钉钉配置错误: {e}")
+            return False, ErrorCode.DINGTALK_ERROR
+        except RuntimeError as e:
+            print(f"[ERROR] 钉钉审核流程异常: {e}")
+            send_failure_alert(config, f"钉钉审核流程异常: {e}")
             if args.debug:
                 traceback.print_exc()
-            print("[INFO] 可使用 --no-crm 跳过下载，直接使用本地 Excel 文件")
-            return 1
-    elif args.no_crm:
-        print("[INFO] 已跳过 CRM 接口下载（--no-crm），使用本地 Excel 文件")
-    elif not crm_cfg.get("enabled"):
-        print("[INFO] CRM 接口未启用，使用本地 excel_folder 下的 Excel 文件")
+            return False, ErrorCode.DINGTALK_ERROR
+        print(f"[INFO] 钉钉审核结果: {decision}（{reason}）")
+        if decision != "confirm":
+            print("[INFO] 未获得审核确认，跳过钉钉推送与邮件发送。")
+            return False, None  # 非错误，只是跳过后续
 
-    # 2. 汇总 Excel 内容（仅处理 CRM 下载的单个文件；未下载时取目录最新文件兜底）
+    # 发送钉钉周报（审核通过后推送给钉钉接收人）
+    if dt_cfg.get("enabled") and (not need_confirm or decision == "confirm"):
+        try:
+            send_dingtalk_report(report_text, out_path.name, config)
+        except ValueError as e:
+            print(f"[ERROR] 钉钉配置错误: {e}")
+            return False, ErrorCode.DINGTALK_ERROR
+        except RuntimeError as e:
+            print(f"[ERROR] 钉钉周报发送失败: {e}")
+            send_failure_alert(config, f"钉钉周报发送失败: {e}")
+            if args.debug:
+                traceback.print_exc()
+            return False, ErrorCode.DINGTALK_ERROR
+
+    return True, None
+
+
+def send_email_if_enabled(
+    report_text: str,
+    out_path: Path,
+    config: dict,
+    downloaded_excel_path: Optional[str],
+    args: argparse.Namespace,
+) -> Optional[int]:
+    """根据配置和参数决定是否发送邮件
+
+    Returns:
+        错误码或 None（成功时返回 None）
+    """
+    if args.no_email:
+        print("[INFO] 已跳过邮件发送（--no-email）")
+        return None
+    if not config.get("email", {}).get("enabled"):
+        return None
+
+    try:
+        send_report_email(report_text, out_path, config, downloaded_excel_path)
+        return None
+    except ValueError as e:
+        print(f"[ERROR] 邮件配置错误: {e}")
+        return ErrorCode.EMAIL_ERROR
+    except RuntimeError as e:
+        print(f"[ERROR] 邮件发送失败: {e}")
+        send_failure_alert(config, f"邮件发送失败: {e}")
+        if args.debug:
+            traceback.print_exc()
+        return ErrorCode.EMAIL_ERROR
+
+
+def main() -> int:
+    args = parse_args()
+    if not _acquire_lock():
+        return ErrorCode.LOCK_FAILED
+    try:
+        return _run(args)
+    finally:
+        _release_lock()
+
+
+def _run(args: argparse.Namespace) -> int:
+    config = load_config()
+
+    # 1. 应用命令行参数覆盖配置（必须在日志初始化之前，否则日志文件名无法反映 --output 等参数）
+    apply_args_to_config(args, config)
+
+    # 2. 初始化日志系统
+    log_path = init_run_logging(config, args.debug)
+
+    # 3. 节假日检查
+    skip_code = check_holiday_skip(args.force, log_path)
+    if skip_code is not None:
+        return skip_code
+
+    # 4. CRM 下载
+    downloaded_excel_path, error = download_crm_if_enabled(config, args)
+    if error:
+        return error
+
+    # 5. 汇总 Excel 内容
     try:
         excel_text = aggregate_excel_content(config, downloaded_excel_path)
     except FileNotFoundError as e:
         print(f"[ERROR] {e}")
-        return 1
+        return ErrorCode.CRM_ERROR
 
     if args.dry_run:
         print("\n" + "=" * 60)
         print("Excel 汇总内容预览：")
         print("=" * 60)
         print(excel_text)
-        return 0
+        return ErrorCode.SUCCESS
 
-    # 3. 构建 prompt
+    # 6. 构建 Prompt 并调用 LLM
     prompt = build_prompt(excel_text, config)
     print(f"[INFO] Prompt 总字符数: {len(prompt)}")
+    report_text, error = generate_report_via_llm(prompt, config, args.debug)
+    if error:
+        return error
 
-    # 4. 调用 LLM API
-    try:
-        report_text = call_llm_api(prompt, config)
-    except ValueError as e:
-        # 配置类错误（如 api_key 缺失、provider 未知）
-        print(f"[ERROR] 配置错误: {e}")
-        return 2
-    except RuntimeError as e:
-        # 运行时错误（网络、鉴权、限流、服务端异常等）
-        print(f"[ERROR] AI 接口调用失败: {e}")
+    # 7. 保存周报
+    out_path = save_report_to_file(report_text, config)
 
-        # 对部分错误给出切换 provider 的建议
-        err_str = str(e)
-        should_suggest_alt = any(
-            kw in err_str for kw in ("401", "403", "429", "超时", "网络连接失败", "服务端异常")
-        )
-        if should_suggest_alt:
-            providers = config.get("providers", {})
-            current = config["provider"]
-            alternatives = [
-                p for p, cfg in providers.items()
-                if p != current and cfg.get("api_key", "").strip()
-            ]
-            if alternatives:
-                print(f"\n[提示] 可尝试切换到其他已配置 provider 重试：")
-                for p in alternatives:
-                    print(f"  python weekly_report.py --provider {p}")
-        if args.debug:
-            traceback.print_exc()
-        return 2
-    except Exception as e:
-        print(f"[ERROR] 未知异常: {e}")
-        traceback.print_exc()
-        return 2
+    # 8. 钉钉审核与推送
+    should_continue, error = handle_dingtalk_review(report_text, out_path, config, args)
+    if error:
+        return error
+    if not should_continue:
+        return ErrorCode.SUCCESS
 
-    # 5. 输出结果
-    out_path = resolve_output_path(config)
-    print("\n" + "=" * 60)
-    print("生成的周报内容：")
-    print("=" * 60)
-    print(report_text)
-
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(report_text, encoding="utf-8")
-    print(f"\n[INFO] 周报已保存至: {out_path.absolute()}")
-
-    # 6. 钉钉人工审核（启用时：推送预览给审核人，等待回复「发送/取消」）
-    dt_cfg = config.get("dingtalk", {})
-    need_confirm = dt_cfg.get("enabled", False) and not args.no_confirm
-    if need_confirm:
-        try:
-            decision, reason = wait_for_confirmation(report_text, out_path.name, config)
-        except ValueError as e:
-            print(f"[ERROR] 钉钉配置错误: {e}")
-            return 4
-        except RuntimeError as e:
-            print(f"[ERROR] 钉钉审核流程异常: {e}")
-            if args.debug:
-                traceback.print_exc()
-            return 4
-        print(f"[INFO] 钉钉审核结果: {decision}（{reason}）")
-        if decision != "confirm":
-            print("[INFO] 未获得审核确认，跳过钉钉推送与邮件发送。")
-            return 0
-
-    # 7. 发送钉钉周报（审核通过后推送给钉钉接收人）
-    if dt_cfg.get("enabled") and (not need_confirm or decision == "confirm"):
-        try:
-            send_dingtalk_report(report_text, out_path.name, config)
-        except ValueError as e:
-            print(f"[ERROR] 钉钉配置错误: {e}")
-            return 4
-        except RuntimeError as e:
-            print(f"[ERROR] 钉钉周报发送失败: {e}")
-            if args.debug:
-                traceback.print_exc()
-            return 4
-
-    # 8. 发送邮件（审核通过后，或钉钉审核未启用时）
-    if not args.no_email and config.get("email", {}).get("enabled"):
-        try:
-            send_report_email(report_text, out_path, config, downloaded_excel_path)
-        except ValueError as e:
-            print(f"[ERROR] 邮件配置错误: {e}")
-            return 3
-        except RuntimeError as e:
-            print(f"[ERROR] 邮件发送失败: {e}")
-            if args.debug:
-                traceback.print_exc()
-            return 3
-    elif args.no_email:
-        print("[INFO] 已跳过邮件发送（--no-email）")
+    # 9. 发送邮件
+    error = send_email_if_enabled(report_text, out_path, config, downloaded_excel_path, args)
+    if error:
+        return error
 
     print(f"[INFO] 全流程执行结束，运行日志: {log_path}")
-    return 0
+    return ErrorCode.SUCCESS
 
 
 if __name__ == "__main__":

@@ -41,10 +41,12 @@ REM Record exit code
 set "EXITCODE=%ERRORLEVEL%"
 echo [INFO] weekly_report.py exit code: %EXITCODE%
 
-REM Exit codes:
-REM   0 = success
-REM   1 = excel folder error
-REM   2 = AI API error
-REM   3 = email send error
+REM Exit codes (see weekly_report.py ErrorCode):
+REM   0  = success
+REM   1  = CRM download error / excel folder error
+REM   2  = AI API error
+REM   3  = email send error
+REM   4  = dingtalk error
+REM   10 = lock failed (another instance is running)
 
 exit /b %EXITCODE%

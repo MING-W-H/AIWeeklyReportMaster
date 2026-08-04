@@ -14,6 +14,7 @@
 安全说明：使用 HTTPS 防止中间人篡改节假日数据导致任务被恶意跳过。
 """
 import json
+import socket
 import ssl
 import urllib.request
 import urllib.error
@@ -77,7 +78,8 @@ def _fetch_holiday_info(d: date) -> Optional[dict]:
             data = json.loads(resp.read().decode("utf-8"))
         if data.get("code") == 0:
             return data
-    except (urllib.error.URLError, json.JSONDecodeError, TimeoutError, ConnectionError):
+    except (urllib.error.URLError, json.JSONDecodeError, TimeoutError, ConnectionError,
+            ssl.SSLError, socket.timeout, OSError):
         pass
     return None
 

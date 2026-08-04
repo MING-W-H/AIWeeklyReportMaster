@@ -51,29 +51,32 @@ except ImportError:
     DINGTALK_STREAM_AVAILABLE = False
 
 
-class WhoamiHandler(dingtalk_stream.ChatbotHandler):
+if DINGTALK_STREAM_AVAILABLE:
+    class WhoamiHandler(dingtalk_stream.ChatbotHandler):
 
-    def __init__(self, logger: logging.Logger, done_event: asyncio.Event):
-        super().__init__()
-        self.logger = logger
-        self.done_event = done_event
+        def __init__(self, logger: logging.Logger, done_event: asyncio.Event):
+            super().__init__()
+            self.logger = logger
+            self.done_event = done_event
 
-    async def process(self, callback: dingtalk_stream.CallbackMessage):
-        msg = dingtalk_stream.ChatbotMessage.from_dict(callback.data)
-        staff_id = getattr(msg, "sender_staff_id", "") or "(未获取到)"
-        nick = getattr(msg, "sender_nick", "") or "(未知)"
-        print()
-        print("=" * 60)
-        print("收到钉钉消息!")
-        print(f"  发送人昵称 : {nick}")
-        print(f"  发送人 userId: {staff_id}")
-        print("=" * 60)
-        print("请将上述 userId 填入 config.json 的 dingtalk.approver_staff_ids")
-        print("或 dingtalk.recipient_staff_ids 中。")
-        print()
-        # 不再向钉钉回复任何内容，避免与周报审核流程的 Stream 连接抢占消息
-        self.done_event.set()
-        return AckMessage.STATUS_OK, "OK"
+        async def process(self, callback: dingtalk_stream.CallbackMessage):
+            msg = dingtalk_stream.ChatbotMessage.from_dict(callback.data)
+            staff_id = getattr(msg, "sender_staff_id", "") or "(未获取到)"
+            nick = getattr(msg, "sender_nick", "") or "(未知)"
+            print()
+            print("=" * 60)
+            print("收到钉钉消息!")
+            print(f"  发送人昵称 : {nick}")
+            print(f"  发送人 userId: {staff_id}")
+            print("=" * 60)
+            print("请将上述 userId 填入 config.json 的 dingtalk.approver_staff_ids")
+            print("或 dingtalk.recipient_staff_ids 中。")
+            print()
+            # 不再向钉钉回复任何内容，避免与周报审核流程的 Stream 连接抢占消息
+            self.done_event.set()
+            return AckMessage.STATUS_OK, "OK"
+else:
+    WhoamiHandler = None  # type: ignore[assignment,misc]
 
 
 async def _run_stream(app_key: str, app_secret: str) -> None:

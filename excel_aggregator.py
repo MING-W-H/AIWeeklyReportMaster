@@ -81,6 +81,44 @@ def _resolve_column_by_letter(df: "pd.DataFrame", letter: str) -> Optional[str]:
     return None
 
 
+# 列名映射：目标表头 → 兜底列字母
+_COLUMN_HEADER_MAP = {
+    "任务名称": "B",
+    "项目/需求": "D",
+    "工作描述": "H",
+}
+
+
+def _resolve_columns_by_header(df: "pd.DataFrame") -> Dict[str, Optional[str]]:
+    """优先按表头名匹配列，失败时回退到列字母。
+
+    遍历 DataFrame 的实际列名，尝试匹配目标表头（如"任务名称"）。
+    若所有目标列都匹配成功，返回表头匹配结果；
+    否则对有匹配失败的列回退到列字母兜底。
+
+    Returns:
+        {目标表头: 列名或 None}
+    """
+    col_names = [str(c).strip() for c in df.columns]
+    result: Dict[str, Optional[str]] = {}
+
+    for target, fallback_letter in _COLUMN_HEADER_MAP.items():
+        # 尝试按表头名匹配（包含关系匹配）
+        matched = None
+        for col_name in col_names:
+            if target in col_name:
+                matched = col_name
+                break
+        if matched:
+            result[target] = matched
+        else:
+            # 回退到列字母
+            result[target] = _resolve_column_by_letter(df, fallback_letter)
+            if result[target]:
+                print(f"  [DEBUG] 表头「{target}」未匹配，回退到列字母 {fallback_letter}")
+    return result
+
+
 def _clean_cell(value: Any) -> str:
     """清理单元格值：去除 NaN、首尾空白、换行符压缩。"""
     if value is None or (isinstance(value, float) and pd.isna(value)):
@@ -139,10 +177,11 @@ def collect_tasks_from_excel(file_path: Path) -> List[str]:
         if df.empty or df.shape[1] == 0:
             continue
 
-        # 按列字母定位三列
-        col_b = _resolve_column_by_letter(df, "B")  # 任务名称
-        col_d = _resolve_column_by_letter(df, "D")  # 项目/需求
-        col_h = _resolve_column_by_letter(df, "H")  # 工作描述
+        # 按表头名匹配三列（优先）；失败时回退到列字母
+        resolved = _resolve_columns_by_header(df)
+        col_b = resolved.get("任务名称")  # 任务名称
+        col_d = resolved.get("项目/需求")  # 项目/需求
+        col_h = resolved.get("工作描述")  # 工作描述
 
         if col_b is None:
             print(f"  [WARN] {file_path.name} Sheet '{sheet_name}' 列数不足，无法定位 B 列")

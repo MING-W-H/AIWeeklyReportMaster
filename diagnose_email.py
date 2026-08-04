@@ -23,7 +23,7 @@ CONFIG_PATH = Path(__file__).parent / "config.json"
 def main():
     if not CONFIG_PATH.exists():
         print(f"[ERROR] 找不到配置文件: {CONFIG_PATH}")
-        return
+        return 1
 
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         config = json.load(f)
@@ -48,15 +48,15 @@ def main():
     # 1. 检查必填字段
     if not sender:
         print("[FAIL] email.sender 为空")
-        return
+        return 1
     if not password:
         print("[FAIL] email.password 为空")
-        return
+        return 1
 
     # 2. 检查发件人邮箱格式
     if "@" not in sender or "." not in sender.split("@")[-1]:
         print(f"[FAIL] 发件人邮箱格式异常: {sender}")
-        return
+        return 1
     print(f"[OK] 发件人邮箱格式正常")
 
     # 3. 检查密码长度（腾讯企业邮箱客户端专用密码通常为 16 位）
@@ -69,7 +69,7 @@ def main():
     # 4. 检查密码是否包含空格或特殊字符
     if " " in password or "\n" in password or "\r" in password:
         print(f"[FAIL] 密码中包含空格或换行符，请重新复制")
-        return
+        return 1
     print(f"[OK] 密码无空格/换行符")
 
     # 5. 测试 SMTP 连接 + 登录
@@ -97,7 +97,7 @@ def main():
         print("\n" + "=" * 60)
         print("诊断结论：邮箱配置完全正常，可正常运行 weekly_report.py")
         print("=" * 60)
-        return
+        return 0
     except smtplib.SMTPAuthenticationError as e:
         print(f"[FAIL] 登录失败 (SMTPAuthenticationError)")
         print(f"       错误码: {e.smtp_code}")
@@ -127,7 +127,7 @@ def main():
         print(f"[OK] 登录成功！鉴权通过！")
         server.quit()
         print("\n[提示] 465 失败但 587 成功，请将 config.json 中 smtp_port 改为 587")
-        return
+        return 0
     except smtplib.SMTPAuthenticationError as e:
         print(f"[FAIL] 587 登录也失败: {e.smtp_error}")
     except Exception as e:
@@ -169,7 +169,8 @@ def main():
   ③ 替换 config.json 中 password 字段（注意 JSON 格式）
   ④ 重新运行 python diagnose_email.py
 """)
+    return 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main() or 0)
