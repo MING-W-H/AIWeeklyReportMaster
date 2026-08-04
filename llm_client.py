@@ -4,9 +4,11 @@
 负责通过 OpenAI 兼容协议调用各 AI provider（minimax/deepseek/opencode/qwen），
 生成周报文本。包含详细的错误处理（HTTP 状态码、超时、网络异常等）。
 """
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 import requests
+
+from retry_utils import retry_request
 
 from text_utils import strip_chat_prefix
 
@@ -61,11 +63,19 @@ def build_prompt(excel_text: str, config: Dict[str, Any]) -> str:
     )
 
 
-def call_llm_api(prompt: str, config: Dict[str, Any]) -> str:
-    """统一调用 LLM API (OpenAI 兼容协议)。
+# ============ call_llm_api 的职责拆分子函数 ============
 
-    根据 config["provider"] 选择 minimax / deepseek / opencode / qwen，
-    使用对应 provider 的 base_url / model / api_key 进行请求。
+def _validate_provider_config(config: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+    """验证 provider 配置，返回 (provider_name, provider配置字典)。
+
+    Args:
+        config: 全局配置字典
+
+    Returns:
+        (provider_name, prov) 元组
+
+    Raises:
+        ValueError: provider 未知或 api_key 缺失
     """
     provider_name = config["provider"]
     providers = config.get("providers", {})
@@ -93,7 +103,25 @@ def call_llm_api(prompt: str, config: Dict[str, Any]) -> str:
             + hint
         )
 
-    base_url = prov["base_url"]
+    return provider_name, prov
+
+
+def _build_request_payload(
+    prompt: str,
+    prov: Dict[str, Any],
+    config: Dict[str, Any],
+) -> Tuple[Dict[str, str], Dict[str, Any]]:
+    """构建 HTTP 请求的 headers 和 payload。
+
+    Args:
+        prompt: 用户提示词
+        prov: provider 配置字典
+        config: 全局配置
+
+    Returns:
+        (headers, payload) 元组
+    """
+    api_key = prov.get("api_key", "").strip()
     model = prov["model"]
     max_tokens_field = prov.get("max_tokens_field", "max_completion_tokens")
 
@@ -132,22 +160,46 @@ def call_llm_api(prompt: str, config: Dict[str, Any]) -> str:
     if config.get("thinking_enabled") and prov.get("thinking_param"):
         payload["thinking"] = prov["thinking_param"]
 
-    print(f"[INFO] 调用 {provider_name} / {model} 生成周报中...")
-    if config.get("thinking_enabled"):
-        thinking_status = "enabled" if prov.get("thinking_param") else "not supported by this provider"
-        print(f"[INFO] 思考模式: {thinking_status}")
+    return headers, payload
 
-    # ============ 发起 HTTP 请求 ============
+
+def _send_http_request(
+    base_url: str,
+    headers: Dict[str, str],
+    payload: Dict[str, Any],
+    config: Dict[str, Any],
+    func_name: str,
+) -> requests.Response:
+    """发起 HTTP 请求（带网络重试），返回响应对象。
+
+    Args:
+        base_url: API 地址
+        headers: 请求头
+        payload: 请求体
+        config: 全局配置
+        func_name: 日志中显示的函数描述
+
+    Returns:
+        HTTP 响应对象
+
+    Raises:
+        RuntimeError: 超时、连接异常等网络错误
+    """
     # timeout 使用 (connect_timeout, read_timeout) 元组：
     #   - connect_timeout: 建立连接的超时（10 秒足够）
     #   - read_timeout: 读取数据的超时（用 config.timeout，默认 180 秒）
     timeout_tuple = (10, config["timeout"])
     try:
-        response = requests.post(
+        response = retry_request(
+            requests.post,
             base_url,
             headers=headers,
             json=payload,
             timeout=timeout_tuple,
+            max_retries=2,
+            base_delay=1.0,
+            backoff=2.0,
+            func_name=func_name,
         )
     except requests.exceptions.ConnectTimeout:
         raise RuntimeError(
@@ -172,8 +224,28 @@ def call_llm_api(prompt: str, config: Dict[str, Any]) -> str:
     except requests.exceptions.RequestException as e:
         raise RuntimeError(f"HTTP 请求异常: {e}")
 
-    # ============ 解析 HTTP 状态码 ============
+    return response
+
+
+def _handle_http_error(
+    response: requests.Response,
+    provider_name: str,
+    base_url: str,
+    model: str,
+) -> None:
+    """根据 HTTP 状态码抛出友好的错误信息。
+
+    Args:
+        response: HTTP 响应对象
+        provider_name: provider 名称
+        base_url: API 地址
+        model: 模型名称
+
+    Raises:
+        RuntimeError: 根据状态码抛出对应的错误信息
+    """
     status_code = response.status_code
+
     if status_code == 401:
         raise RuntimeError(
             f"鉴权失败 (HTTP 401)：api_key 无效或已过期。请检查 config.json 中 "
@@ -206,7 +278,23 @@ def call_llm_api(prompt: str, config: Dict[str, Any]) -> str:
             f"请求失败 (HTTP {status_code})。"
         )
 
-    # ============ 解析响应体 ============
+
+def _parse_llm_response(
+    response: requests.Response,
+    provider_name: str,
+) -> Tuple[str, Dict[str, Any]]:
+    """解析 LLM API 响应，提取周报内容和 usage 信息。
+
+    Args:
+        response: HTTP 响应对象
+        provider_name: provider 名称
+
+    Returns:
+        (content, usage) 元组：周报正文内容与 token 使用统计字典
+
+    Raises:
+        RuntimeError: 响应解析失败或内容为空
+    """
     try:
         data = response.json()
     except ValueError as e:
@@ -246,8 +334,16 @@ def call_llm_api(prompt: str, config: Dict[str, Any]) -> str:
             f"{provider_name} API 返回 content 为空。"
         )
 
-    # 提取 token 使用情况（OpenAI 兼容协议标准字段）
     usage = data.get("usage") or {}
+    return content, usage
+
+
+def _print_token_usage(usage: Dict[str, Any]) -> None:
+    """打印 token 使用统计信息。
+
+    Args:
+        usage: OpenAI 兼容协议的 usage 字典
+    """
     prompt_tokens = usage.get("prompt_tokens", 0)
     completion_tokens = usage.get("completion_tokens", 0)
     total_tokens = usage.get("total_tokens", 0)
@@ -264,6 +360,41 @@ def call_llm_api(prompt: str, config: Dict[str, Any]) -> str:
         print(f"       - 其中思考 tokens    : {reasoning_tokens:,}")
     print(f"       - 输出 Completion    : {completion_tokens:,}")
     print(f"       - 总计 Total tokens  : {total_tokens:,}")
+
+
+def call_llm_api(prompt: str, config: Dict[str, Any]) -> str:
+    """统一调用 LLM API (OpenAI 兼容协议)。
+
+    根据 config["provider"] 选择 minimax / deepseek / opencode / qwen，
+    使用对应 provider 的 base_url / model / api_key 进行请求。
+    """
+    # 1. 参数验证
+    provider_name, prov = _validate_provider_config(config)
+    base_url = prov["base_url"]
+    model = prov["model"]
+
+    # 2. 构建请求
+    headers, payload = _build_request_payload(prompt, prov, config)
+
+    # 3. 打印调用信息
+    print(f"[INFO] 调用 {provider_name} / {model} 生成周报中...")
+    if config.get("thinking_enabled"):
+        thinking_status = "enabled" if prov.get("thinking_param") else "not supported by this provider"
+        print(f"[INFO] 思考模式: {thinking_status}")
+
+    # 4. 发起 HTTP 请求
+    response = _send_http_request(
+        base_url, headers, payload, config, func_name=f"{provider_name}/{model}"
+    )
+
+    # 5. 处理 HTTP 错误
+    _handle_http_error(response, provider_name, base_url, model)
+
+    # 6. 解析响应
+    content, usage = _parse_llm_response(response, provider_name)
+
+    # 7. 打印 token 统计
+    _print_token_usage(usage)
 
     # 仅返回周报正文内容，不输出模型的思考过程
     # 同时清理模型可能残留的对话式开头语（如"好的，根据您提供的数据..."）

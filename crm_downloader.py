@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """CRM 工时 Excel 下载模块。
 
 负责：
@@ -12,12 +12,13 @@
 import os
 import json
 import base64
-import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
+
+from retry_utils import retry_request
 
 
 # ============ 日期范围计算 ============
@@ -126,11 +127,16 @@ def refresh_crm_token(config: Dict[str, Any]) -> str:
     print(f"[INFO] CRM token 已失效，正在调用登录接口刷新: {login_url}")
 
     try:
-        response = requests.post(
+        response = retry_request(
+            requests.post,
             login_url,
             headers=headers,
             json=body,
             timeout=(10, timeout),
+            max_retries=2,
+            base_delay=1.0,
+            backoff=2.0,
+            func_name="CRM 登录接口",
         )
     except requests.exceptions.RequestException as e:
         raise RuntimeError(f"CRM 登录接口请求异常: {e}")
@@ -243,25 +249,19 @@ def cleanup_download_dir(
             print(f"  [WARN] 删除旧文件失败 {item.name}: {e}")
     return removed
 
-# ============ 主下载函数 ============
-def download_workhour_excel(
-    config: Dict[str, Any],
-    start_date: Optional[str] = None,
-    finish_date: Optional[str] = None,
-) -> Path:
-    """从 CRM 接口下载工时 Excel 文件。
+
+# ============ 辅助函数（主下载流程拆分） ============
+def _validate_crm_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    """验证 CRM 配置完整性，返回 crm 配置字典。
 
     Args:
         config: 全局配置字典
-        start_date: 手动指定起始日期 (YYYY-MM-DD)，为 None 时自动计算上一周周一
-        finish_date: 手动指定结束日期 (YYYY-MM-DD)，为 None 时自动计算上一周周五
 
     Returns:
-        下载保存的 Excel 文件 Path
+        crm_cfg: CRM 配置字典
 
     Raises:
-        RuntimeError: 接口调用失败、鉴权失败、响应解析失败等
-        ValueError: CRM 配置缺失
+        ValueError: CRM 未启用或关键配置缺失
     """
     crm_cfg = config.get("crm", {})
     if not crm_cfg.get("enabled"):
@@ -271,9 +271,13 @@ def download_workhour_excel(
     if not url:
         raise ValueError("CRM 配置缺失: crm.url 未设置")
 
+    return crm_cfg
+
+
+def _resolve_crm_token(crm_cfg: Dict[str, Any]) -> str:
+    """从配置或环境变量解析 CRM token。"""
     token = crm_cfg.get("token", "").strip()
     if not token:
-        # 尝试从环境变量读取
         token = os.getenv("CRM_TOKEN", "").strip()
     if not token:
         raise ValueError(
@@ -281,35 +285,62 @@ def download_workhour_excel(
             "请在 config.json 中填入 authorization Bearer 后面的 token 值，"
             "或设置环境变量 CRM_TOKEN"
         )
+    return token
 
-    # 日期范围：优先使用手动指定，否则自动计算上一周周一至周五
+
+def _calc_date_range(
+    start_date: Optional[str], finish_date: Optional[str]
+) -> Tuple[str, str]:
+    """计算下载日期范围，优先使用手动指定，否则自动计算上一周周一至周五。"""
     if start_date and finish_date:
-        start_stamp, finish_stamp = start_date, finish_date
-    else:
-        start_stamp, finish_stamp = calc_last_week_workdays()
-        start_stamp = start_date or start_stamp
-        finish_stamp = finish_date or finish_stamp
+        return start_date, finish_date
+    auto_start, auto_finish = calc_last_week_workdays()
+    return start_date or auto_start, finish_date or auto_finish
 
-    print(f"[INFO] CRM 工时下载日期范围: {start_stamp} ~ {finish_stamp}")
 
-    # 构建请求头（参照 JS 示例）
-    def _build_headers(tok: str) -> Dict[str, str]:
-        h = {
-            "accept": "application/json, text/plain, */*",
-            "accept-language": "zh-CN",
-            "authorization": f"Bearer:{tok}",
-            "content-type": "application/json",
-            "requestbybrowser": "Y",
-            "userid": crm_cfg.get("userid", ""),
-        }
-        # tyinjectparams 可选
-        tyinject = crm_cfg.get("tyinjectparams", "").strip()
-        if tyinject:
-            h["tyinjectparams"] = tyinject
-        return h
+def _build_range_label(
+    start_date: Optional[str], finish_date: Optional[str]
+) -> str:
+    """根据日期范围计算文件名标签（同年省略结束年份）。
 
-    # 构建请求体
-    body = {
+    手动指定日期时解析后格式化，自动模式直接复用 calc_last_week_range_label。
+    """
+    if start_date and finish_date:
+        try:
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            finish_dt = datetime.strptime(finish_date, "%Y-%m-%d")
+            start_str = _fmt_date_no_leading_zero(start_dt)
+            if start_dt.year == finish_dt.year:
+                end_str = f"{finish_dt.month}.{finish_dt.day}"
+            else:
+                end_str = _fmt_date_no_leading_zero(finish_dt)
+            return f"{start_str}-{end_str}"
+        except ValueError:
+            return calc_last_week_range_label()
+    return calc_last_week_range_label()
+
+
+def _build_crm_headers(crm_cfg: Dict[str, Any], token: str) -> Dict[str, str]:
+    """构建 CRM 请求头。"""
+    h = {
+        "accept": "application/json, text/plain, */*",
+        "accept-language": "zh-CN",
+        "authorization": f"Bearer:{token}",
+        "content-type": "application/json",
+        "requestbybrowser": "Y",
+        "userid": crm_cfg.get("userid", ""),
+    }
+    tyinject = crm_cfg.get("tyinjectparams", "").strip()
+    if tyinject:
+        h["tyinjectparams"] = tyinject
+    return h
+
+
+def _build_crm_body(
+    crm_cfg: Dict[str, Any], start_stamp: str, finish_stamp: str
+) -> Dict[str, Any]:
+    """构建 CRM 请求体。"""
+    return {
         "startStamp": start_stamp,
         "finishStamp": finish_stamp,
         "pageQuery": False,
@@ -323,19 +354,44 @@ def download_workhour_excel(
         "state": "",
     }
 
-    timeout = int(crm_cfg.get("timeout", 60))
-    print(f"[INFO] 调用 CRM 接口下载工时 Excel: {url}")
 
-    # 发起请求（401 时自动刷新 token 重试一次）
-    response = None
+def _send_crm_request_with_retry(
+    url: str,
+    crm_cfg: Dict[str, Any],
+    body: Dict[str, Any],
+    token: str,
+    config: Dict[str, Any],
+) -> "requests.Response":
+    """发送 CRM 请求，401 时自动刷新 token 并重试一次。
+
+    Args:
+        url: CRM 接口地址
+        crm_cfg: CRM 配置字典
+        body: 请求体
+        token: 当前 token
+        config: 全局配置（用于 token 刷新时传参）
+
+    Returns:
+        response: HTTP 响应对象
+
+    Raises:
+        RuntimeError: 网络异常或 token 刷新失败
+    """
+    timeout = int(crm_cfg.get("timeout", 60))
+
     for attempt in range(2):  # 最多 2 次：首次 + 刷新后重试 1 次
-        headers = _build_headers(token)
+        headers = _build_crm_headers(crm_cfg, token)
         try:
-            response = requests.post(
+            response = retry_request(
+                requests.post,
                 url,
                 headers=headers,
                 json=body,
                 timeout=(10, timeout),
+                max_retries=2,
+                base_delay=1.0,
+                backoff=2.0,
+                func_name=f"CRM 下载 ({url})",
             )
         except requests.exceptions.ConnectTimeout:
             raise RuntimeError(
@@ -367,7 +423,11 @@ def download_workhour_excel(
             continue
         break  # 非 401 或已重试过，跳出循环
 
-    # 状态码检查
+    return response
+
+
+def _check_crm_response_status(response: "requests.Response", url: str) -> None:
+    """检查 CRM 响应状态码，非 200 则抛出异常。"""
     status = response.status_code
     if status == 401:
         raise RuntimeError(
@@ -394,40 +454,43 @@ def download_workhour_excel(
             f"CRM 接口请求失败 (HTTP {status})。"
         )
 
-    # 下载目录准备
-    download_dir_str = crm_cfg.get("download_dir", "excel_files")
-    download_dir = Path(download_dir_str)
+
+def _resolve_download_dir(crm_cfg: Dict[str, Any]) -> Path:
+    """解析下载目录路径（相对路径基于脚本所在目录），并自动创建。"""
+    download_dir = Path(crm_cfg.get("download_dir", "excel_files"))
     if not download_dir.is_absolute():
         download_dir = Path(__file__).parent / download_dir
     download_dir.mkdir(parents=True, exist_ok=True)
+    return download_dir
 
-    # 统一计算本次下载的日期范围标签（用于命名和清理）
-    if start_date and finish_date:
-        try:
-            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-            finish_dt = datetime.strptime(finish_date, "%Y-%m-%d")
-            start_str = _fmt_date_no_leading_zero(start_dt)
-            end_str = (
-                f"{finish_dt.month}.{finish_dt.day}"
-                if start_dt.year == finish_dt.year
-                else _fmt_date_no_leading_zero(finish_dt)
-            )
-            range_label = f"{start_str}-{end_str}"
-        except ValueError:
-            range_label = calc_last_week_range_label()
-    else:
-        range_label = calc_last_week_range_label()
 
-    # 清理日期范围相同的旧文件（保留其他周的历史文件）
-    extensions = config.get("excel_extensions", [".xlsx", ".xls", ".xlsm"])
-    removed = cleanup_download_dir(download_dir, extensions, range_label)
-    if removed:
-        print(f"[INFO] 已清理 {removed} 个日期范围重复的旧 Excel 文件（保留其他周历史文件）")
+def _extract_excel_from_response(
+    response: "requests.Response",
+    range_label: str,
+    start_stamp: str,
+    finish_stamp: str,
+    download_dir: Path,
+) -> Path:
+    """从 CRM 响应中提取 Excel 文件并保存到下载目录。
 
-    # 统一文件名：可视化团队+上一周日期范围.xlsx
+    支持两种响应格式：
+    1. Excel 二进制流（Content-Type 含 spreadsheet/excel 等）
+    2. JSON 响应（Base64 编码的 Excel 数据）
+
+    Args:
+        response: HTTP 响应对象
+        range_label: 日期范围标签（用于文件命名）
+        start_stamp: 起始日期（用于异常响应命名）
+        finish_stamp: 结束日期（用于异常响应命名）
+        download_dir: 下载目录
+
+    Returns:
+        save_path: 保存的 Excel 文件路径
+
+    Raises:
+        RuntimeError: 响应格式无法识别或数据缺失
+    """
     filename = f"可视化团队{range_label}.xlsx"
-
-    # 解析响应：可能是 Excel 二进制流，也可能是 JSON
     content_type = response.headers.get("Content-Type", "").lower()
 
     # 情况 1：直接返回 Excel 二进制
@@ -452,7 +515,6 @@ def download_workhour_excel(
             f"Content-Type: {content_type}。请打开该文件排查。"
         )
 
-    # JSON 响应处理
     # 检查错误字段
     err = data.get("error") or data.get("errorMsg") or data.get("message")
     err_code = data.get("errorCode") or data.get("code")
@@ -471,15 +533,12 @@ def download_workhour_excel(
         or ""
     )
     if isinstance(file_b64, dict):
-      # 可能是 { filename: ..., content: ... } 结构
-      filename = file_b64.get("filename") or file_b64.get("name")
-      file_b64 = file_b64.get("content") or file_b64.get("data") or ""
-      # 兜底：若没拿到 filename，用前面计算好的统一文件名
-      if not filename:
-        filename = f"可视化团队{range_label}.xlsx"
-    else:
-      # 非 dict 的 base64 字符串，filename 在前面 line 457 已设置
-      pass
+        # 可能是 { filename: ..., content: ... } 结构
+        filename = file_b64.get("filename") or file_b64.get("name")
+        file_b64 = file_b64.get("content") or file_b64.get("data") or ""
+        # 兜底：若没拿到 filename，用前面计算好的统一文件名
+        if not filename:
+            filename = f"可视化团队{range_label}.xlsx"
 
     if isinstance(file_b64, str) and file_b64:
         try:
@@ -499,4 +558,57 @@ def download_workhour_excel(
     raise RuntimeError(
         "CRM 接口返回 JSON 但未识别到 Excel 文件数据。"
         "请检查 CRM 接口返回格式或账号权限。"
+    )
+
+
+# ============ 主下载函数 ============
+def download_workhour_excel(
+    config: Dict[str, Any],
+    start_date: Optional[str] = None,
+    finish_date: Optional[str] = None,
+) -> Path:
+    """从 CRM 接口下载工时 Excel 文件。
+
+    Args:
+        config: 全局配置字典
+        start_date: 手动指定起始日期 (YYYY-MM-DD)，为 None 时自动计算上一周周一
+        finish_date: 手动指定结束日期 (YYYY-MM-DD)，为 None 时自动计算上一周周五
+
+    Returns:
+        下载保存的 Excel 文件 Path
+
+    Raises:
+        RuntimeError: 接口调用失败、鉴权失败、响应解析失败等
+        ValueError: CRM 配置缺失
+    """
+    # 1. 参数验证
+    crm_cfg = _validate_crm_config(config)
+
+    # 2. 日期计算（统一计算一次，后续日志与命名共用，避免不一致）
+    start_stamp, finish_stamp = _calc_date_range(start_date, finish_date)
+    range_label = _build_range_label(start_date, finish_date)
+    print(f"[INFO] CRM 工时下载日期范围: {start_stamp} ~ {finish_stamp} (文件命名标签: {range_label})")
+
+    # 3. 请求构建
+    token = _resolve_crm_token(crm_cfg)
+    body = _build_crm_body(crm_cfg, start_stamp, finish_stamp)
+    url = crm_cfg.get("url", "").strip()
+    print(f"[INFO] 调用 CRM 接口下载工时 Excel: {url}")
+
+    # 4. 网络请求（含鉴权重试）
+    response = _send_crm_request_with_retry(url, crm_cfg, body, token, config)
+
+    # 5. 状态码检查
+    _check_crm_response_status(response, url)
+
+    # 6. 下载目录准备与旧文件清理
+    download_dir = _resolve_download_dir(crm_cfg)
+    extensions = config.get("excel_extensions", [".xlsx", ".xls", ".xlsm"])
+    removed = cleanup_download_dir(download_dir, extensions, range_label)
+    if removed:
+        print(f"[INFO] 已清理 {removed} 个日期范围重复的旧 Excel 文件（保留其他周历史文件）")
+
+    # 7. 响应解析与文件保存
+    return _extract_excel_from_response(
+        response, range_label, start_stamp, finish_stamp, download_dir
     )

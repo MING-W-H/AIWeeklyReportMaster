@@ -26,6 +26,8 @@ from urllib.parse import quote_plus
 import requests
 import websockets
 
+from retry_utils import retry_request
+
 try:
     import dingtalk_stream
     from dingtalk_stream import AckMessage
@@ -62,10 +64,15 @@ def _get_credentials(dt_cfg: Dict[str, Any]) -> Tuple[str, str]:
 def _get_access_token(app_key: str, app_secret: str) -> str:
     """获取钉钉 API access_token。"""
     try:
-        resp = requests.post(
+        resp = retry_request(
+            requests.post,
             _TOKEN_URL,
             json={"appKey": app_key, "appSecret": app_secret},
             timeout=15,
+            max_retries=2,
+            base_delay=1.0,
+            backoff=2.0,
+            func_name="钉钉 access_token 获取",
         )
     except requests.RequestException as e:
         raise RuntimeError(f"获取钉钉 access_token 网络异常: {e}")
@@ -81,10 +88,15 @@ def _get_access_token(app_key: str, app_secret: str) -> str:
 def _get_oapi_access_token(app_key: str, app_secret: str) -> str:
     """获取旧版 oapi access_token（通讯录接口使用该端点）。"""
     try:
-        resp = requests.get(
+        resp = retry_request(
+            requests.get,
             _OAPI_TOKEN_URL,
             params={"appkey": app_key, "appsecret": app_secret},
             timeout=15,
+            max_retries=2,
+            base_delay=1.0,
+            backoff=2.0,
+            func_name="钉钉 oapi access_token 获取",
         )
     except requests.RequestException as e:
         raise RuntimeError(f"获取钉钉 oapi access_token 网络异常: {e}")
@@ -203,11 +215,16 @@ def _send_markdown_oto(app_key: str, app_secret: str, user_ids: List[str],
         "msgParam": json.dumps({"title": title, "text": text}, ensure_ascii=False),
     }
     try:
-        resp = requests.post(
+        resp = retry_request(
+            requests.post,
             _SEND_OTO_URL,
             headers={"x-acs-dingtalk-access-token": token},
             json=payload,
             timeout=30,
+            max_retries=2,
+            base_delay=1.0,
+            backoff=2.0,
+            func_name="钉钉单聊消息发送",
         )
     except requests.RequestException as e:
         raise RuntimeError(f"钉钉单聊消息发送网络异常: {e}")
@@ -228,11 +245,16 @@ def _send_markdown_group(app_key: str, app_secret: str, conversation_id: str,
         "msgParam": json.dumps({"title": title, "text": text}, ensure_ascii=False),
     }
     try:
-        resp = requests.post(
+        resp = retry_request(
+            requests.post,
             _SEND_GROUP_URL,
             headers={"x-acs-dingtalk-access-token": token},
             json=payload,
             timeout=30,
+            max_retries=2,
+            base_delay=1.0,
+            backoff=2.0,
+            func_name="钉钉群聊消息发送",
         )
     except requests.RequestException as e:
         raise RuntimeError(f"钉钉群聊消息发送网络异常: {e}")
@@ -494,3 +516,36 @@ def send_dingtalk_report(report_text: str, report_name: str,
     if conversation_id:
         _send_markdown_group(app_key, app_secret, conversation_id, title, text)
         print(f"[INFO] 钉钉周报已发送（群聊）: {conversation_id}")
+
+
+def send_failure_alert(config: Dict[str, Any], error_summary: str) -> None:
+    """主流程失败时，向审核人推送告警通知（钉钉单聊）。
+
+    适用于 CRM 下载失败、AI 生成失败、发送失败等异常场景。
+    若钉钉未启用或审核人未配置，则静默跳过（不阻断主流程）。
+    通知模板：config.json 的 notification.templates.failure_alert。
+    """
+    dt_cfg = config.get("dingtalk", {})
+    if not dt_cfg.get("enabled"):
+        return
+    approver_ids = [s.strip() for s in (dt_cfg.get("approver_staff_ids") or []) if str(s).strip()]
+    if not approver_ids:
+        return
+    try:
+        app_key, app_secret = _get_credentials(dt_cfg)
+    except ValueError:
+        return
+    # 从配置模板渲染告警文本
+    try:
+        from config_manager import render_notification
+        title, text = render_notification(config, "failure_alert", error_summary=error_summary)
+    except KeyError as e:
+        # 模板缺失时使用硬编码兜底
+        print(f"[WARN] {e}，使用默认告警格式")
+        title = "周报生成失败"
+        text = f"## 周报生成失败\n\n本周周报自动生成流程出现异常，详情如下：\n\n{error_summary}\n\n请检查日志或联系系统管理员处理。"
+    try:
+        _send_markdown_oto(app_key, app_secret, approver_ids, title, text)
+        print(f"[INFO] 失败告警已发送给审核人: {', '.join(approver_ids)}")
+    except Exception as e:
+        print(f"[WARN] 失败告警发送失败: {e}")

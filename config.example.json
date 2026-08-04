@@ -60,7 +60,6 @@
   },
   "email": {
     "enabled": false,
-    "pull_from_env": true,
     "smtp_host": "smtp.exmail.qq.com",
     "smtp_port": 465,
     "sender": "",
@@ -69,6 +68,28 @@
     "cc": [],
     "subject_template": "Vue 周报 {last_week_range}",
     "attach_report": true
+  },
+  "contact_info": {
+    "email": "your_email@example.com",
+    "phone": "13800138000",
+    "dingtalk": "本机器人"
+  },
+  "notification": {
+    "templates": {
+      "weekly_notice": {
+        "title": "周报通知",
+        "template": "**各位领导好：**\n\n**重要通知：** 自本周起，周报将统一通过本钉钉机器人发送，后续请留意机器人消息提醒，及时查收周报内容。\n\n---\n\n**联系方式**\n- 钉钉：{dingtalk}\n- 邮箱：{email}\n- 电话：{phone}\n\n---\n\n{footer}"
+      },
+      "failure_alert": {
+        "title": "周报生成失败",
+        "template": "## 周报生成失败\n\n本周周报自动生成流程出现异常，详情如下：\n\n{error_summary}\n\n请检查日志或联系系统管理员处理。\n\n---\n\n**联系方式**\n- 钉钉：{dingtalk}\n- 邮箱：{email}\n- 电话：{phone}"
+      }
+    }
+  },
+  "retry": {
+    "max_retries": 2,
+    "base_delay": 1.0,
+    "backoff": 2.0
   },
   "dingtalk": {
     "enabled": false,

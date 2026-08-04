@@ -10,7 +10,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 # ============ 自动加载 .env 文件 ============
 # 优先级：进程环境变量 > .env 文件 > config.json
@@ -99,6 +99,49 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "subject_template": "Vue 周报 {last_week_range}",  # 邮件主题模板
         "attach_report": True,                       # 是否将周报文件作为附件发送
     },
+    "contact_info": {                                # 个人联系方式（用于通知消息）
+        "email": "your_email@example.com",            # 邮箱
+        "phone": "13800138000",                       # 手机号
+        "dingtalk": "本机器人",                        # 钉钉说明
+    },
+    "notification": {                                 # 消息通知模板（钉钉 Markdown 格式）
+        "templates": {                                # 多通知类型模板
+            "weekly_notice": {                        # 周报通知（dingtalk_send_notice.py 用）
+                "title": "周报通知",
+                "template": (
+                    "**各位领导好：**\n\n"
+                    "**重要通知：** 自本周起，周报将统一通过本钉钉机器人发送，"
+                    "后续请留意机器人消息提醒，及时查收周报内容。\n\n"
+                    "---\n\n"
+                    "**联系方式**\n"
+                    "- 钉钉：{dingtalk}\n"
+                    "- 邮箱：{email}\n"
+                    "- 电话：{phone}\n\n"
+                    "---\n\n"
+                    "{footer}"
+                ),
+            },
+            "failure_alert": {                        # 失败告警（send_failure_alert() 用）
+                "title": "周报生成失败",
+                "template": (
+                    "## 周报生成失败\n\n"
+                    "本周周报自动生成流程出现异常，详情如下：\n\n"
+                    "{error_summary}\n\n"
+                    "请检查日志或联系系统管理员处理。\n\n"
+                    "---\n\n"
+                    "**联系方式**\n"
+                    "- 钉钉：{dingtalk}\n"
+                    "- 邮箱：{email}\n"
+                    "- 电话：{phone}"
+                ),
+            },
+        },
+    },
+    "retry": {                                        # 网络请求重试配置
+        "max_retries": 2,                             # 最大重试次数（不含首次）
+        "base_delay": 1.0,                            # 首次重试等待秒数
+        "backoff": 2.0,                               # 退避因子
+    },
     "dingtalk": {                                    # 钉钉人工审核 + 推送配置（企业内部应用机器人 Stream 模式）
         "enabled": False,                            # 启用后 AI 生成周报需经审核人回复确认才发送
         "app_key": "",                               # Client ID（建议放 .env: DINGTALK_APP_KEY）
@@ -169,6 +212,16 @@ def load_config() -> Dict[str, Any]:
     config.setdefault("dingtalk", {})
     for k, v in dingtalk_default.items():
         config["dingtalk"].setdefault(k, v)
+    # 确保 contact_info 配置段存在（兼容旧版配置升级）
+    config.setdefault("contact_info", DEFAULT_CONFIG.get("contact_info", {}))
+    # 确保 notification 配置段存在（兼容旧版配置升级）
+    config.setdefault("notification", DEFAULT_CONFIG.get("notification", {}))
+    # 确保 templates 子段存在
+    config["notification"].setdefault("templates", {})
+    for k, v in DEFAULT_CONFIG.get("notification", {}).get("templates", {}).items():
+        config["notification"]["templates"].setdefault(k, v)
+    # 确保 retry 配置段存在（兼容旧版配置升级）
+    config.setdefault("retry", DEFAULT_CONFIG.get("retry", {}))
     # 环境变量覆盖 CRM 配置（便于 CI / 容器部署，避免明文存储）
     if os.getenv("CRM_TOKEN"):
         config["crm"]["token"] = os.environ["CRM_TOKEN"]
@@ -185,3 +238,39 @@ def load_config() -> Dict[str, Any]:
     if os.getenv("DINGTALK_APP_SECRET"):
         config["dingtalk"]["app_secret"] = os.environ["DINGTALK_APP_SECRET"]
     return config
+
+
+def render_notification(config: Dict[str, Any], template_name: str, **kwargs) -> Tuple[str, str]:
+    """渲染通知模板，返回 (title, text)。
+
+    Args:
+        config: 已加载的配置字典
+        template_name: 模板名称（如 "weekly_notice", "failure_alert"）
+        **kwargs: 模板占位符的值（如 error_summary="xxx", footer="yyy"）
+
+    Returns:
+        (title, text) — 消息标题与正文
+
+    自动注入 contact_info 中的 {dingtalk}/{email}/{phone} 占位符，
+    调用方无需手动传入联系方式。
+    """
+    templates = config.get("notification", {}).get("templates", {})
+    tpl = templates.get(template_name)
+    if not tpl:
+        raise KeyError(f"通知模板 '{template_name}' 不存在，请检查 config.json notification.templates")
+    title = tpl.get("title", template_name)
+    template = tpl.get("template", "")
+
+    # 自动注入联系方式占位符
+    contact = config.get("contact_info", {})
+    render_kwargs = {
+        "dingtalk": contact.get("dingtalk", "本机器人"),
+        "email": contact.get("email", ""),
+        "phone": contact.get("phone", ""),
+        "footer": "",
+    }
+    # 调用方传入的值优先
+    render_kwargs.update(kwargs)
+
+    text = template.format(**render_kwargs)
+    return title, text

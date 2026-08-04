@@ -6,9 +6,12 @@
 - 日志文件按「周报名称」命名，如 logs/Vue2026.7.13-7.19周报.txt
 - 通过 stdout/stderr tee 重定向，将全流程所有 print 输出同步写入日志文件，
   保证每一步骤（节假日检查 / CRM 下载 / Excel 汇总 / AI 生成 / 钉钉审核 / 发送）均有留存
+- 启动时自动清理 90 天前的旧日志文件
 """
 import logging
+import os
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
@@ -77,6 +80,31 @@ def _redirect_stdout_stderr(log_path: Path) -> None:
     sys.stderr = _TeeStream(_ORIGINAL_STDERR, log_fh)
 
 
+def cleanup_old_logs(days: int = 90) -> int:
+    """删除 logs/ 目录中修改时间超过指定天数的旧日志文件。
+
+    Returns:
+        删除的文件数
+    """
+    if not LOG_DIR.exists():
+        return 0
+    now = time.time()
+    cutoff = now - days * 86400
+    removed = 0
+    for f in LOG_DIR.iterdir():
+        if not f.is_file():
+            continue
+        try:
+            if f.stat().st_mtime < cutoff:
+                f.unlink()
+                removed += 1
+        except OSError:
+            pass
+    if removed:
+        print(f"[INFO] 已清理 {removed} 个 {days} 天前的旧日志文件")
+    return removed
+
+
 def init_logging(run_label: str, debug: bool = False) -> Path:
     """初始化周报运行日志。
 
@@ -89,6 +117,8 @@ def init_logging(run_label: str, debug: bool = False) -> Path:
     """
     global CURRENT_LOG_PATH
     LOG_DIR.mkdir(parents=True, exist_ok=True)
+    # 启动时自动清理 90 天前的旧日志
+    cleanup_old_logs(days=90)
     log_path = LOG_DIR / f"{run_label}.txt"
 
     # 清理 root logger 已有 handlers，避免重复
