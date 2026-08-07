@@ -426,7 +426,7 @@ def call_llm_chat(
         messages: 对话历史 [{role: "user"|"assistant", content: str}, ...]，
                   仅传入用户/助手的交替消息，系统人设由 system_prompt 单独预设
         config: 全局配置
-        system_prompt: 预设系统提示词（人设参数），如"你是天喻软件的 AI 周报机器人…"，
+        system_prompt: 预设系统提示词（人设参数），如"你是公司的 AI 周报机器人…"，
                       为 None 时使用周报默认人设
 
     Returns:

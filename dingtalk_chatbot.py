@@ -2,7 +2,7 @@
 """钉钉 AI 问答机器人模块。
 
 通过钉钉 Stream 长连接接收用户在钉钉中给机器人发送的消息（单聊 / 群聊 @ 机器人），
-将用户消息连同预设的系统提示词（人设参数，如"你是天喻软件的 AI 周报机器人…"）
+将用户消息连同预设的系统提示词（人设参数，如"你是公司的 AI 周报机器人…"）
 一起发给大模型，再把模型回答回复给用户。
 
 特点：
@@ -51,9 +51,9 @@ _REPLY_TITLE = "AI 周报机器人"
 
 # 默认系统提示词（人设参数）。config.json 的 chatbot.system_prompt 可覆盖。
 DEFAULT_CHATBOT_SYSTEM_PROMPT = (
-    "你是天喻软件（InteVue）的 AI 周报机器人，"
-    "由天喻软件内部开发，服务于公司员工。"
-    "你可以回答与天喻软件、周报系统、CRM 工时填写、公司日常事务等相关的各类问题。\n\n"
+    "你是公司的 AI 周报机器人，"
+    "由公司内部开发，服务于员工。"
+    "你可以回答与周报系统、CRM 工时填写、公司日常事务等相关的各类问题。\n\n"
     "行为准则：\n"
     "1. 使用简体中文回答，语言专业、简洁、友好\n"
     "2. 涉及不确定或不清楚的信息时，如实说明，不要编造\n"
@@ -237,7 +237,7 @@ def run_chatbot(config: Dict[str, Any], debug: bool = False) -> int:
     allow_ids = [s for s in (chatbot_cfg.get("allow_user_ids") or []) if str(s).strip()]
 
     print("=" * 60)
-    print("天喻 AI 周报机器人（大模型问答）")
+    print("AI 周报机器人（大模型问答）")
     print("=" * 60)
     print(f"大模型: {provider_name} / {model}")
     print(f"允许用户: {'全部员工' if not allow_ids else ', '.join(allow_ids)}")

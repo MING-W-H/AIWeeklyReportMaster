@@ -45,7 +45,7 @@ def calc_last_week_range_label(today: Optional[datetime] = None) -> str:
     """计算上一周周一至周五的日期范围标签（同年省略结束年份）。
 
     示例：2026.7.13-7.17
-    用于 CRM 下载文件命名：可视化团队2026.7.13-7.17.xlsx
+    用于 CRM 下载文件命名：{export_prefix}2026.7.13-7.17.xlsx（前缀见 crm.export_prefix 配置）
     """
     today = today or datetime.now()
     weekday = today.weekday()
@@ -89,7 +89,7 @@ def refresh_crm_token(config: Dict[str, Any]) -> str:
     if not username:
         raise ValueError(
             "CRM 登录配置缺失: crm.username 未设置。"
-            "请在 config.json 中填入 CRM 登录账号（如 T0265），"
+            "请在 config.json 中填入 CRM 登录账号（如 user001），"
             "或设置环境变量 CRM_USERNAME"
         )
 
@@ -215,6 +215,7 @@ def cleanup_download_dir(
     download_dir: Path,
     extensions: List[str],
     new_range_label: Optional[str] = None,
+    export_prefix: str = "",
 ) -> int:
     """清理下载目录中日期范围重复的旧 Excel 文件，返回删除的文件数。
 
@@ -225,15 +226,16 @@ def cleanup_download_dir(
         extensions: Excel 扩展名列表
         new_range_label: 新下载文件的日期范围标签（如 "2026.7.13-7.17"）。
             若为 None 则回退到清空全部旧文件（兼容旧逻辑）。
+        export_prefix: 下载文件名前缀（crm.export_prefix 配置），为空则不带前缀
     """
     if not download_dir.exists():
         download_dir.mkdir(parents=True, exist_ok=True)
         return 0
 
     # 根据文件名中的日期范围标签判断是否重复
-    # 文件命名格式：可视化团队{range_label}.xlsx
+    # 文件命名格式：{export_prefix}{range_label}.xlsx
     # 只删除日期范围相同的旧文件，保留其他周的历史文件
-    target_keyword = f"可视化团队{new_range_label}" if new_range_label else None
+    target_keyword = f"{export_prefix}{new_range_label}" if new_range_label else None
 
     removed = 0
     for item in download_dir.iterdir():
@@ -470,6 +472,7 @@ def _extract_excel_from_response(
     start_stamp: str,
     finish_stamp: str,
     download_dir: Path,
+    export_prefix: str = "",
 ) -> Path:
     """从 CRM 响应中提取 Excel 文件并保存到下载目录。
 
@@ -483,6 +486,7 @@ def _extract_excel_from_response(
         start_stamp: 起始日期（用于异常响应命名）
         finish_stamp: 结束日期（用于异常响应命名）
         download_dir: 下载目录
+        export_prefix: 下载文件名前缀（crm.export_prefix 配置），为空则不带前缀
 
     Returns:
         save_path: 保存的 Excel 文件路径
@@ -490,7 +494,7 @@ def _extract_excel_from_response(
     Raises:
         RuntimeError: 响应格式无法识别或数据缺失
     """
-    filename = f"可视化团队{range_label}.xlsx"
+    filename = f"{export_prefix}{range_label}.xlsx"
     content_type = response.headers.get("Content-Type", "").lower()
 
     # 情况 1：直接返回 Excel 二进制
@@ -538,7 +542,7 @@ def _extract_excel_from_response(
         file_b64 = file_b64.get("content") or file_b64.get("data") or ""
         # 兜底：若没拿到 filename，用前面计算好的统一文件名
         if not filename:
-            filename = f"可视化团队{range_label}.xlsx"
+            filename = f"{export_prefix}{range_label}.xlsx"
 
     if isinstance(file_b64, str) and file_b64:
         try:
@@ -583,6 +587,7 @@ def download_workhour_excel(
     """
     # 1. 参数验证
     crm_cfg = _validate_crm_config(config)
+    export_prefix = crm_cfg.get("export_prefix", "")
 
     # 2. 日期计算（统一计算一次，后续日志与命名共用，避免不一致）
     start_stamp, finish_stamp = _calc_date_range(start_date, finish_date)
@@ -604,11 +609,11 @@ def download_workhour_excel(
     # 6. 下载目录准备与旧文件清理
     download_dir = _resolve_download_dir(crm_cfg)
     extensions = config.get("excel_extensions", [".xlsx", ".xls", ".xlsm"])
-    removed = cleanup_download_dir(download_dir, extensions, range_label)
+    removed = cleanup_download_dir(download_dir, extensions, range_label, export_prefix)
     if removed:
         print(f"[INFO] 已清理 {removed} 个日期范围重复的旧 Excel 文件（保留其他周历史文件）")
 
     # 7. 响应解析与文件保存
     return _extract_excel_from_response(
-        response, range_label, start_stamp, finish_stamp, download_dir
+        response, range_label, start_stamp, finish_stamp, download_dir, export_prefix
     )

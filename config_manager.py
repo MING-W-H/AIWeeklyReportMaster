@@ -82,9 +82,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "user_oid_list": [],                         # 用户 OID 列表（可选）
         "project_oid_list": [],                      # 项目 OID 列表（可选）
         "download_dir": "excel_files",               # 下载保存目录（相对脚本目录或绝对路径）
+        "export_prefix": "",                         # 下载文件名前缀（如团队名，可留空），例如 "{export_prefix}2026.7.13-7.17.xlsx"
         "timeout": 60,                               # CRM 接口请求超时（秒）
         "login_url": "https://crm.example.com/rest/userService/v1/user/userLoginPlm",
-        "username": "",                             # CRM 登录账号（如 T0265），用于 token 失效时自动刷新
+        "username": "",                             # CRM 登录账号（如 user001），用于 token 失效时自动刷新
         "password": "",                             # CRM 登录密码（加密后的字符串，敏感，建议用环境变量 CRM_PASSWORD）
         "app_id": "Chrome(149.0.0.0)",              # 登录请求体 appID 字段
     },
@@ -176,14 +177,14 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "send_weekday": 4,                           # 每周几发送：0=周一 ... 6=周日（默认 4=周五）
         "skip_holiday": True,                        # 法定节假日/周末自动跳过（复用 holiday_checker）
         "conversation_id": "",                       # 目标钉钉群 openConversationId（留空回退 dingtalk.open_conversation_id）
-        "remind_user_ids": [""],                       # 需要 @ 的图形组成员 userId 列表（运行 dingtalk_userid.py --dept 获取）
+        "remind_user_ids": [""],                       # 需要 @ 的成员 userId 列表（运行 dingtalk_userid.py --dept 获取）
     },
     "chatbot": {                                     # 钉钉 AI 问答机器人配置（dingtalk_chatbot.py 用，大模型回答用户问题）
         "enabled": False,                            # 是否启用 AI 问答机器人
         "system_prompt": (                           # 预设系统提示词（人设参数），发送给大模型的机器人身份与行为约束
-            "你是天喻软件（InteVue）的 AI 周报机器人，"
-            "由天喻软件内部开发，服务于公司员工。"
-            "你可以回答与天喻软件、周报系统、CRM 工时填写、公司日常事务等相关的各类问题。\n\n"
+            "你是公司的 AI 周报机器人，"
+            "由公司内部开发，服务于员工。"
+            "你可以回答与周报系统、CRM 工时填写、公司日常事务等相关的各类问题。\n\n"
             "行为准则：\n"
             "1. 使用简体中文回答，语言专业、简洁、友好\n"
             "2. 涉及不确定或不清楚的信息时，如实说明，不要编造\n"

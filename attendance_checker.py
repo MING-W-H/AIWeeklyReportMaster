@@ -7,8 +7,8 @@
 
 使用方式：
     1. 按 userId 查询（推荐，最多一次 50 人）：
-       python attendance_checker.py --userids T0265,T0266,T0267
-       python attendance_checker.py --userids T0265 --start 2026-07-27 --end 2026-08-02
+       python attendance_checker.py --userids user001,user002,user003
+       python attendance_checker.py --userids user001 --start 2026-07-27 --end 2026-08-02
 
     2. 按部门查询（查询部门下全部成员，需通讯录读权限）：
        python attendance_checker.py --dept 872611
@@ -423,8 +423,8 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例：\n"
-            "  python attendance_checker.py --userids T0265,T0266\n"
-            "  python attendance_checker.py --userids T0265 --start 2026-07-27 --end 2026-08-02\n"
+            "  python attendance_checker.py --userids user001,user002\n"
+            "  python attendance_checker.py --userids user001 --start 2026-07-27 --end 2026-08-02\n"
             "  python attendance_checker.py --dept 872611\n"
             "  python attendance_checker.py --excel\n"
             "  python attendance_checker.py --excel attendance.xlsx"

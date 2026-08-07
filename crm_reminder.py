@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """CRM 填写提醒脚本（钉钉群消息）。
 
-每周五下午 15:00 向指定钉钉群发送「CRM 工时填写」提醒，并 @ 图形组部分成员，
+每周五下午 15:00 向指定钉钉群发送「CRM 工时填写」提醒，并 @ 部分成员，
 提醒他们记得填写 CRM 系统。
 
 使用方式：
@@ -16,7 +16,7 @@
     crm_reminder.skip_holiday: true                     # 法定节假日/周末自动跳过（复用 holiday_checker）
     crm_reminder.conversation_id: "cidXXX=="            # 目标钉钉群 openConversationId
                                                         #   （留空回退 dingtalk.open_conversation_id）
-    crm_reminder.remind_user_ids: ["T0265", ...]        # 需要 @ 的图形组成员 userId
+    crm_reminder.remind_user_ids: ["user001", ...]      # 需要 @ 的成员 userId
                                                         #   （运行 dingtalk_userid.py --dept 获取）
     notification.templates.crm_reminder:                # 提醒内容模板（支持 {names} 占位符 = @名单）
 
