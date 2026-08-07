@@ -41,6 +41,7 @@
 - **环境变量支持**：API Key、邮箱密码、CRM Token 均可通过环境变量注入，便于 CI/CD
 - **定时任务**：支持注册 Windows 计划任务，每周一自动执行
 - **节假日检查**：自动跳过法定节假日和周末，支持调休上班日判断
+- **钉钉 AI 问答机器人**：将钉钉机器人接入大模型，用户可直接向机器人提问，由大模型结合预设人设参数（如"你是天喻软件的 AI 周报机器人"）自动回答
 
 ---
 
@@ -58,6 +59,7 @@ AIWeeklyReportMaster/
 ├── email_sender.py              # 邮件发送（腾讯企业邮箱 SMTP）
 ├── logger.py                    # 日志系统（全流程输出按周报名称写入 logs/）
 ├── dingtalk_confirmer.py        # 钉钉人工审核 + 周报推送（Stream 模式）
+├── dingtalk_chatbot.py          # 钉钉 AI 问答机器人（接入大模型回答用户问题）
 ├── dingtalk_userid.py           # 钉钉 userId 查询工具（一键列出部门成员 userId）
 ├── holiday_checker.py           # 节假日检查（法定假日 + 调休 + 在线 API）
 ├── diagnose_email.py            # 邮件配置诊断脚本
@@ -597,8 +599,90 @@ python weekly_report.py --no-confirm
 | 机器人收不到消息                | 检查事件订阅是否选择 Stream 模式、应用版本是否已发布上线                                       |
 | 发送单聊消息报权限错误          | 在开发者后台「权限管理」中确认已开通 `qyapi_robot_sendmsg` 权限                             |
 | `dingtalk.approver_staff_ids 未配置` | 先运行 `python dingtalk_userid.py --dept` 获取 userId 后填入配置                                 |
-| 搜索不到机器人                  | 确认应用已发布上线，且可用范围包含你自己                                                       |
+| 搜索不到机器人                  | 确认应用已发布上线，且可用范围包含你自己                                       |
 | `请求的部门id不在授权范围内`    | 开发者后台 → 应用 → **权限管理** → 找到通讯录权限（成员信息读权限等）→ 点击 **添加** → 将部门/人员加入**授权范围**（可选"全部员工"） |
+
+---
+
+## 钉钉 AI 问答机器人
+
+将钉钉机器人接入大模型：员工在钉钉中向机器人提问（单聊 / 群聊 @ 机器人），
+系统会把用户消息连同**预设的系统提示词（人设参数）**一起发给大模型，再把模型回答回复给用户。
+
+### 工作原理
+
+```
+用户钉钉提问 → Stream 长连接接收消息 → 拼接预设人设参数(system_prompt) + 多轮对话历史
+    → 调用大模型（OpenAI 兼容接口）→ 生成回答 → 钉钉回复用户
+```
+
+- **预设人设参数**：`chatbot.system_prompt` 中可配置机器人的身份与行为约束
+  （如"你是天喻软件的 AI 周报机器人…"），每次调用都会作为 System Prompt 传给大模型
+- **多轮对话**：按会话（单聊按人、群聊按群）保留最近 N 轮上下文，支持追问
+- **权限控制**：`chatbot.allow_user_ids` 白名单（留空则允许所有员工）
+- **群聊**：仅在 @ 机器人时响应；**单聊**：任意消息均响应
+- **清空上下文**：发送「清空 / 重置 / /clear」等关键词可重置当前会话
+
+### 使用方式
+
+```bash
+# 启动 AI 问答机器人（常驻运行，Ctrl+C 退出）
+python dingtalk_chatbot.py
+
+# 启动并打印详细日志
+python dingtalk_chatbot.py --debug
+```
+
+> 注意：钉钉 Stream 长连接同一应用同一时间只允许一个进程连接。
+> 运行 `dingtalk_chatbot.py` 时请不要同时运行周报审核流程（`weekly_report.py`）或其他 Stream 工具。
+
+### 配置说明
+
+`config.json` 中的 `chatbot` 段（默认示例）：
+
+```json
+{
+  "chatbot": {
+    "enabled": true,
+    "system_prompt": "你是天喻软件（InteVue）的 AI 周报机器人，由天喻软件内部开发，服务于公司员工。你可以回答与天喻软件、周报系统、CRM 工时填写、公司日常事务等相关的各类问题。\n\n行为准则：\n1. 使用简体中文回答，语言专业、简洁、友好\n2. 涉及不确定或不清楚的信息时，如实说明，不要编造\n3. 涉及个人隐私或公司机密的信息，礼貌地表示不便回答\n4. 回答先给结论再给理由，不要使用 Markdown 表格",
+    "allow_user_ids": [],
+    "max_history_turns": 10,
+    "max_reply_chars": 8000,
+    "reset_keywords": ["清空", "清空对话", "重置", "重置对话", "/clear"]
+  }
+}
+```
+
+| 字段               | 类型       | 说明                                                        |
+| ------------------ | ---------- | ----------------------------------------------------------- |
+| `enabled`        | boolean    | 是否启用 AI 问答机器人                                       |
+| `system_prompt`  | string     | **预设人设参数**：发给大模型的 System Prompt，定义机器人身份与行为约束 |
+| `allow_user_ids` | string[]   | 允许使用机器人的用户 userId 白名单，留空 `[]` = 全部员工    |
+| `max_history_turns` | number  | 每个会话保留的对话轮数（多轮上下文），默认 10                |
+| `max_reply_chars` | number    | 单条回复最大字符数，超出截断，默认 8000                      |
+| `reset_keywords` | string[]   | 清空对话上下文的关键词，默认 `["清空","清空对话","重置","重置对话","/clear"]` |
+
+### 自定义人设参数
+
+`system_prompt` 即"预设参数"的核心，可按需修改，例如：
+
+```json
+{
+  "chatbot": {
+    "system_prompt": "你是天喻软件的 AI 周报助手，擅长周报写作、CRM 工时填写指导。请始终使用简体中文、友好简洁地回答，涉及不确定的信息要如实说明。"
+  }
+}
+```
+
+### 常见问题
+
+| 问题                   | 原因与解决                                                                 |
+| ---------------------- | -------------------------------------------------------------------------- |
+| 启动提示未启用         | `chatbot.enabled` 为 `false`，改为 `true` 后重新运行                       |
+| 机器人不回复群聊消息   | 群聊需 **@ 机器人** 才响应（`is_in_at_list` 校验）                          |
+| 部分员工无法使用       | `allow_user_ids` 配置了白名单，未列入的用户会被拒绝（可留空开放全员）       |
+| 启动提示钉钉凭证未配置 | 同周报审核：需在 `.env` 设置 `DINGTALK_APP_KEY / DINGTALK_APP_SECRET`     |
+| 回答内容与周报无关     | 调整 `chatbot.system_prompt` 人设参数，约束回答范围与语气                    |
 
 ---
 
@@ -1072,6 +1156,11 @@ weekly_report.py (主入口)
     │     └── text_utils.py       (Markdown 转 HTML)
     └── dingtalk_confirmer.py  (钉钉人工审核 + 推送)
 
+dingtalk_chatbot.py (钉钉 AI 问答机器人，独立常驻进程)
+    ├── config_manager.py      (配置)
+    ├── llm_client.py          (LLM 多轮对话 + 预设人设参数)
+    └── dingtalk_confirmer.py  (钉钉凭证 / Stream 能力复用)
+
 register_weekly.ps1 (定时任务注册)
     └── run_weekly_report.bat (定时任务启动脚本)
           └── weekly_report.py (调用主脚本)
@@ -1092,6 +1181,7 @@ register_weekly.ps1 (定时任务注册)
 | [email_sender.py](email_sender.py)             | 腾讯企业邮箱 SMTP 发送                            | `send_report_email()`                                      |
 | [logger.py](logger.py)                         | 日志系统：控制台 + 日志文件双输出，按周报名称写入 logs/ | `init_logging()`                                  |
 | [dingtalk_confirmer.py](dingtalk_confirmer.py) | 钉钉人工审核（Stream 长连接）+ 周报推送           | `wait_for_confirmation()`, `send_dingtalk_report()`     |
+| [dingtalk_chatbot.py](dingtalk_chatbot.py) | 钉钉 AI 问答机器人（接入大模型回答用户问题）       | `run_chatbot()`, `ChatbotLLMHandler`                 |
 | [dingtalk_userid.py](dingtalk_userid.py)       | 钉钉 userId 查询工具（部门成员 / 手机号 / 消息触发） | `main()`                                                   |
 | [diagnose_email.py](diagnose_email.py)         | 邮件配置诊断                                      | `main()`                                                   |
 | [register_weekly.ps1](register_weekly.ps1)     | 注册 Windows 定时任务（每周一 10:00）             | -                                                            |
@@ -1152,6 +1242,7 @@ register_weekly.ps1 (定时任务注册)
 | ------------ | ---------------------- | ------------------------ |
 | `pandas`   | Excel 数据读取         | `pip install pandas`   |
 | `openpyxl` | `.xlsx` 文件解析引擎 | `pip install openpyxl` |
+| `xlrd`     | `.xls` 文件解析引擎   | `pip install xlrd`     |
 | `requests` | HTTP 请求 LLM API      | `pip install requests` |
 
 其他模块（`smtplib`、`email`、`argparse`、`json`、`re` 等）均为 Python 标准库，无需额外安装。

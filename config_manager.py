@@ -135,6 +135,17 @@ DEFAULT_CONFIG: Dict[str, Any] = {
                     "- 电话：{phone}"
                 ),
             },
+            "crm_reminder": {                         # CRM 填写提醒（crm_reminder.py 用）
+                "title": "CRM 填写提醒",
+                "template": (
+                    "## 周五 CRM 填写提醒\n\n"
+                    "{names}\n\n"
+                    "请记得在今天下班前完成 **CRM 工时填写**，谢谢配合！\n\n"
+                    "- **截止时间**：今天 17:00 前\n\n"
+                    "---\n\n"
+                    "{footer}"
+                ),
+            },
         },
     },
     "retry": {                                        # 网络请求重试配置
@@ -154,27 +165,79 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "timeout_minutes": 30,                       # 等待审核回复超时时间（分钟）
         "preview_max_chars": 12000,                  # 钉钉 Markdown 消息最大字符数（超出截断）
     },
+    "attendance": {                                  # 考勤查询配置（attendance_checker.py 用）
+        "user_ids": [],                              # 默认查询的考勤 userId 列表（未传 --userids/--dept 时使用）
+        "start_date": "",                            # 查询开始日期 YYYY-MM-DD，留空则默认最近 7 天（--start 优先）
+        "end_date": "",                              # 查询结束日期 YYYY-MM-DD，留空则默认今天（--end 优先）
+        "output_folder": "attendance_output",        # Excel 导出文件夹（数据含员工考勤信息，已被 gitignore 忽略）
+    },
+    "crm_reminder": {                                # CRM 填写提醒配置（crm_reminder.py 用，每周五定时发钉钉群）
+        "enabled": False,                            # 是否启用 CRM 填写提醒
+        "send_weekday": 4,                           # 每周几发送：0=周一 ... 6=周日（默认 4=周五）
+        "skip_holiday": True,                        # 法定节假日/周末自动跳过（复用 holiday_checker）
+        "conversation_id": "",                       # 目标钉钉群 openConversationId（留空回退 dingtalk.open_conversation_id）
+        "remind_user_ids": [""],                       # 需要 @ 的图形组成员 userId 列表（运行 dingtalk_userid.py --dept 获取）
+    },
+    "chatbot": {                                     # 钉钉 AI 问答机器人配置（dingtalk_chatbot.py 用，大模型回答用户问题）
+        "enabled": False,                            # 是否启用 AI 问答机器人
+        "system_prompt": (                           # 预设系统提示词（人设参数），发送给大模型的机器人身份与行为约束
+            "你是天喻软件（InteVue）的 AI 周报机器人，"
+            "由天喻软件内部开发，服务于公司员工。"
+            "你可以回答与天喻软件、周报系统、CRM 工时填写、公司日常事务等相关的各类问题。\n\n"
+            "行为准则：\n"
+            "1. 使用简体中文回答，语言专业、简洁、友好\n"
+            "2. 涉及不确定或不清楚的信息时，如实说明，不要编造\n"
+            "3. 涉及个人隐私或公司机密的信息，礼貌地表示不便回答\n"
+            "4. 回答先给结论再给理由，不要使用 Markdown 表格"
+        ),
+        "allow_user_ids": [],                        # 允许使用机器人的用户 userId 白名单（留空=全部员工）
+        "max_history_turns": 10,                     # 每个会话保留的对话轮数（多轮上下文）
+        "max_reply_chars": 8000,                     # 单条回复最大字符数（超出截断）
+        "reset_keywords": ["清空", "清空对话", "重置", "重置对话", "/clear"],  # 清空对话上下文关键词
+    },
 }
 
 CONFIG_PATH = Path(__file__).parent / "config.json"
 
+# 需要合并默认值的配置段列表（新增配置段时在此追加）
+_SECTIONS_TO_MERGE = ("email", "crm", "dingtalk", "attendance", "crm_reminder", "chatbot")
 
-def load_config() -> Dict[str, Any]:
-    """加载配置：config.json > 环境变量 > 默认值。"""
-    if not CONFIG_PATH.exists():
-        CONFIG_PATH.write_text(
-            json.dumps(DEFAULT_CONFIG, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        print(f"[INFO] 已生成配置模板: {CONFIG_PATH}")
-        print("[INFO] 请编辑 config.json 填入对应 provider 的 api_key、excel_folder 后重新运行。")
-        sys.exit(0)
 
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-        config = json.load(f)
+def _merge_config_section(config: Dict[str, Any], section_name: str) -> None:
+    """合并单个配置段的默认值（原地更新，兼容旧版配置升级）。
 
-    # 环境变量覆盖（便于 CI / 容器部署）
-    # 支持为每个 provider 单独设置 api_key: MINIMAX_API_KEY / DEEPSEEK_API_KEY / OPENCODE_API_KEY / QWEN_API_KEY
+    Args:
+        config: 全局配置字典（会原地更新）
+        section_name: 配置段名称（如 "email"、"crm"、"dingtalk"）
+    """
+    section_default = DEFAULT_CONFIG.get(section_name, {})
+    config.setdefault(section_name, {})
+    for k, v in section_default.items():
+        config[section_name].setdefault(k, v)
+
+
+def _merge_providers_config(config: Dict[str, Any]) -> None:
+    """合并 providers 配置：确保四个 provider 都存在且字段完整。"""
+    for prov_name, preset in PROVIDER_PRESETS.items():
+        config["providers"].setdefault(prov_name, preset)
+        # 补齐新增字段（如 thinking_param / max_tokens_field）
+        for k, v in preset.items():
+            config["providers"][prov_name].setdefault(k, v)
+
+
+def _merge_notification_templates(config: Dict[str, Any]) -> None:
+    """合并 notification.templates 配置：确保各通知模板存在。"""
+    config["notification"].setdefault("templates", {})
+    for k, v in DEFAULT_CONFIG.get("notification", {}).get("templates", {}).items():
+        config["notification"]["templates"].setdefault(k, v)
+
+
+def _apply_env_overrides(config: Dict[str, Any]) -> None:
+    """应用环境变量覆盖到配置字典（原地更新，便于 CI / 容器部署）。
+
+    优先级：环境变量 > config.json。敏感信息（密码/凭证）建议用环境变量注入。
+    """
+    # 各 provider 的 API Key: MINIMAX_API_KEY / DEEPSEEK_API_KEY / OPENCODE_API_KEY / QWEN_API_KEY
     env_key_map = {
         "minimax": "MINIMAX_API_KEY",
         "deepseek": "DEEPSEEK_API_KEY",
@@ -187,56 +250,52 @@ def load_config() -> Dict[str, Any]:
             config.setdefault("providers", {}).setdefault(prov_name, {})["api_key"] = env_val
     if os.getenv("EXCEL_FOLDER"):
         config["excel_folder"] = os.environ["EXCEL_FOLDER"]
-
-    # 合并默认值（兼容旧 config 缺字段的情况）
-    for k, v in DEFAULT_CONFIG.items():
-        config.setdefault(k, v)
-    # 确保 providers 中四个 provider 都存在（兼容旧版配置升级）
-    for prov_name, preset in PROVIDER_PRESETS.items():
-        config["providers"].setdefault(prov_name, preset)
-        # 补齐新增字段（如 thinking_param / max_tokens_field）
-        for k, v in preset.items():
-            config["providers"][prov_name].setdefault(k, v)
-    # 确保 email 配置段存在且字段完整（兼容旧版配置升级）
-    email_default = DEFAULT_CONFIG.get("email", {})
-    config.setdefault("email", {})
-    for k, v in email_default.items():
-        config["email"].setdefault(k, v)
-    # 确保 crm 配置段存在且字段完整（兼容旧版配置升级）
-    crm_default = DEFAULT_CONFIG.get("crm", {})
-    config.setdefault("crm", {})
-    for k, v in crm_default.items():
-        config["crm"].setdefault(k, v)
-    # 确保 dingtalk 配置段存在且字段完整（兼容旧版配置升级）
-    dingtalk_default = DEFAULT_CONFIG.get("dingtalk", {})
-    config.setdefault("dingtalk", {})
-    for k, v in dingtalk_default.items():
-        config["dingtalk"].setdefault(k, v)
-    # 确保 contact_info 配置段存在（兼容旧版配置升级）
-    config.setdefault("contact_info", DEFAULT_CONFIG.get("contact_info", {}))
-    # 确保 notification 配置段存在（兼容旧版配置升级）
-    config.setdefault("notification", DEFAULT_CONFIG.get("notification", {}))
-    # 确保 templates 子段存在
-    config["notification"].setdefault("templates", {})
-    for k, v in DEFAULT_CONFIG.get("notification", {}).get("templates", {}).items():
-        config["notification"]["templates"].setdefault(k, v)
-    # 确保 retry 配置段存在（兼容旧版配置升级）
-    config.setdefault("retry", DEFAULT_CONFIG.get("retry", {}))
-    # 环境变量覆盖 CRM 配置（便于 CI / 容器部署，避免明文存储）
+    # CRM 配置（避免明文存储）
     if os.getenv("CRM_TOKEN"):
         config["crm"]["token"] = os.environ["CRM_TOKEN"]
     if os.getenv("CRM_USERNAME"):
         config["crm"]["username"] = os.environ["CRM_USERNAME"]
     if os.getenv("CRM_PASSWORD"):
         config["crm"]["password"] = os.environ["CRM_PASSWORD"]
-    # 环境变量覆盖邮箱密码（便于 CI / 容器部署）
+    # 邮箱密码（便于 CI / 容器部署）
     if os.getenv("EMAIL_PASSWORD"):
         config["email"]["password"] = os.environ["EMAIL_PASSWORD"]
-    # 环境变量覆盖钉钉凭证（敏感信息不写入 config.json）
+    # 钉钉凭证（敏感信息不写入 config.json）
     if os.getenv("DINGTALK_APP_KEY"):
         config["dingtalk"]["app_key"] = os.environ["DINGTALK_APP_KEY"]
     if os.getenv("DINGTALK_APP_SECRET"):
         config["dingtalk"]["app_secret"] = os.environ["DINGTALK_APP_SECRET"]
+
+
+def load_config() -> Dict[str, Any]:
+    """加载配置：环境变量 > config.json > 默认值。"""
+    if not CONFIG_PATH.exists():
+        CONFIG_PATH.write_text(
+            json.dumps(DEFAULT_CONFIG, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        print(f"[INFO] 已生成配置模板: {CONFIG_PATH}")
+        print("[INFO] 请编辑 config.json 填入对应 provider 的 api_key、excel_folder 后重新运行。")
+        sys.exit(0)
+
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        config = json.load(f)
+
+    # 合并顶层默认值（兼容旧 config 缺字段的情况）
+    for k, v in DEFAULT_CONFIG.items():
+        config.setdefault(k, v)
+
+    # 合并嵌套配置段默认值（兼容旧版配置升级）
+    _merge_providers_config(config)
+    for section in _SECTIONS_TO_MERGE:
+        _merge_config_section(config, section)
+    config.setdefault("contact_info", DEFAULT_CONFIG.get("contact_info", {}))
+    config.setdefault("notification", DEFAULT_CONFIG.get("notification", {}))
+    _merge_notification_templates(config)
+    config.setdefault("retry", DEFAULT_CONFIG.get("retry", {}))
+
+    # 环境变量覆盖（优先级最高）
+    _apply_env_overrides(config)
     return config
 
 

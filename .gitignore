@@ -27,6 +27,12 @@ reports/
 reports/**
 
 # ========================
+# 考勤导出（attendance_checker.py，含员工考勤信息，隐私数据）
+# ========================
+attendance_output/**
+!attendance_output/.gitkeep
+
+# ========================
 # 数据文件（含工时表，可能含员工信息）
 # ========================
 excel_files/*.xlsx
