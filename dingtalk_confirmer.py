@@ -233,16 +233,24 @@ def _send_markdown_oto(app_key: str, app_secret: str, user_ids: List[str],
 
 
 def _send_markdown_group(app_key: str, app_secret: str, conversation_id: str,
-                         title: str, text: str) -> None:
-    """通过机器人发送群聊 Markdown 消息。"""
+                         title: str, text: str,
+                         at_user_ids: Optional[List[str]] = None) -> None:
+    """通过机器人发送群聊 Markdown 消息。
+
+    Args:
+        at_user_ids: 可选，需要 @ 提醒的成员 userId 列表（为空则不 @）
+    """
     if not conversation_id:
         return
     token = _get_access_token(app_key, app_secret)
+    msg_param: Dict[str, Any] = {"title": title, "text": text}
+    if at_user_ids:
+        msg_param["at"] = {"atUserIds": list(at_user_ids), "isAtAll": False}
     payload = {
         "robotCode": app_key,
         "openConversationId": conversation_id,
         "msgKey": "sampleMarkdown",
-        "msgParam": json.dumps({"title": title, "text": text}, ensure_ascii=False),
+        "msgParam": json.dumps(msg_param, ensure_ascii=False),
     }
     try:
         resp = retry_request(

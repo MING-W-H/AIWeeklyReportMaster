@@ -96,7 +96,31 @@ def _release_lock() -> None:
 
 
 def _pid_alive(pid: int) -> bool:
-    """检查进程是否存活（跨平台）。"""
+    """检查进程是否存活（跨平台）。
+
+    注意：Windows 上 os.kill(pid, 0) 会调用 TerminateProcess 直接杀死目标进程，
+    不能用作存活探测，这里改用 OpenProcess + GetExitCodeProcess 查询。
+    """
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            STILL_ACTIVE = 259
+            kernel32 = ctypes.windll.kernel32
+            handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            if not handle:
+                return False
+            try:
+                exit_code = ctypes.c_ulong()
+                if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                    return False
+                return exit_code.value == STILL_ACTIVE
+            finally:
+                kernel32.CloseHandle(handle)
+        except Exception:
+            # ctypes 探测失败时保守返回 False（视为已退出，允许锁自动接管）
+            return False
     try:
         os.kill(pid, 0)
     except OSError:

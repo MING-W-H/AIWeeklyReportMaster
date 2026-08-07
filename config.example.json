@@ -83,6 +83,10 @@
       "failure_alert": {
         "title": "周报生成失败",
         "template": "## 周报生成失败\n\n本周周报自动生成流程出现异常，详情如下：\n\n{error_summary}\n\n请检查日志或联系系统管理员处理。\n\n---\n\n**联系方式**\n- 钉钉：{dingtalk}\n- 邮箱：{email}\n- 电话：{phone}"
+      },
+      "crm_reminder": {
+        "title": "CRM 填写提醒",
+        "template": "## 周五 CRM 填写提醒\n\n{names}\n\n请记得在今天下班前完成 **CRM 工时填写**，谢谢配合！\n\n- **截止时间**：今天 17:00 前\n\n---\n\n{footer}"
       }
     }
   },
@@ -102,5 +106,18 @@
     "cancel_keywords": ["取消", "cancel", "放弃", "不发送"],
     "timeout_minutes": 30,
     "preview_max_chars": 12000
+  },
+  "attendance": {
+    "user_ids": [],
+    "start_date": "",
+    "end_date": "",
+    "output_folder": "attendance_output"
+  },
+  "crm_reminder": {
+    "enabled": false,
+    "send_weekday": 4,
+    "skip_holiday": true,
+    "conversation_id": "",
+    "remind_user_ids": []
   }
 }

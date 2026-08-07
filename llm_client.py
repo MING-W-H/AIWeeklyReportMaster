@@ -6,11 +6,29 @@
 """
 from typing import Any, Dict, Tuple
 
+import re
+
 import requests
 
 from retry_utils import retry_request
 
 from text_utils import strip_chat_prefix
+
+
+# ============ 默认系统提示词（周报生成场景） ============
+DEFAULT_SYSTEM_PROMPT = (
+    "你是一名专业的项目周报撰写助手，擅长从 Excel 工作数据中提炼关键信息，"
+    "生成结构清晰、重点突出、数据准确的中文周报。"
+    "\n\n严格输出要求："
+    "\n1. 直接以周报标题（如 `# 周报`）开头，不要任何对话式前缀、寒暄或解释性语句"
+    "\n2. 禁止输出诸如「好的」「根据您提供的」「为您生成」「以下是为您整理的」等开头语"
+    "\n3. 仅输出周报正文本身，不要附加任何说明"
+    "\n4. 严禁在周报中提及任何数据汇总过程的元信息，例如："
+    "   「来源 Excel 文件数」「原始条目数」「去重后任务条目数」「共 N 条记录」「去重后剩余 N 项」"
+    "   等表述。这些是 Python 处理过程的中间数据，与周报内容无关，不应出现在周报中"
+    "\n5. 周报应聚焦于实际工作内容、项目进展、问题与解决方案，"
+    "不要描述「汇总」「去重」「Excel」「条目」「记录数」等数据处理概念"
+)
 
 
 # ============ 输出格式对应的系统提示词 ============
@@ -110,13 +128,17 @@ def _build_request_payload(
     prompt: str,
     prov: Dict[str, Any],
     config: Dict[str, Any],
+    system_prompt: str = None,
+    messages: list = None,
 ) -> Tuple[Dict[str, str], Dict[str, Any]]:
     """构建 HTTP 请求的 headers 和 payload。
 
     Args:
-        prompt: 用户提示词
+        prompt: 用户提示词（当 messages 为 None 时使用）
         prov: provider 配置字典
         config: 全局配置
+        system_prompt: 预设系统提示词（人设参数），为 None 时使用周报默认人设
+        messages: 多轮对话历史 [{role, content}, ...]，提供后忽略 prompt 参数
 
     Returns:
         (headers, payload) 元组
@@ -130,27 +152,19 @@ def _build_request_payload(
         "Content-Type": "application/json",
     }
 
+    system_content = system_prompt or DEFAULT_SYSTEM_PROMPT
+    if messages is not None:
+        chat_messages: list = [{"role": "system", "content": system_content}]
+        chat_messages.extend(messages)
+    else:
+        chat_messages = [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": prompt},
+        ]
+
     payload: Dict[str, Any] = {
         "model": model,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "你是一名专业的项目周报撰写助手，擅长从 Excel 工作数据中提炼关键信息，"
-                    "生成结构清晰、重点突出、数据准确的中文周报。"
-                    "\n\n严格输出要求："
-                    "\n1. 直接以周报标题（如 `# 周报`）开头，不要任何对话式前缀、寒暄或解释性语句"
-                    "\n2. 禁止输出诸如「好的」「根据您提供的」「为您生成」「以下是为您整理的」等开头语"
-                    "\n3. 仅输出周报正文本身，不要附加任何说明"
-                    "\n4. 严禁在周报中提及任何数据汇总过程的元信息，例如："
-                    "   「来源 Excel 文件数」「原始条目数」「去重后任务条目数」「共 N 条记录」「去重后剩余 N 项」"
-                    "   等表述。这些是 Python 处理过程的中间数据，与周报内容无关，不应出现在周报中"
-                    "\n5. 周报应聚焦于实际工作内容、项目进展、问题与解决方案，"
-                    "不要描述「汇总」「去重」「Excel」「条目」「记录数」等数据处理概念"
-                ),
-            },
-            {"role": "user", "content": prompt},
-        ],
+        "messages": chat_messages,
         max_tokens_field: config["tokens_to_generate"],
         "temperature": config["temperature"],
         "stream": False,
@@ -399,3 +413,56 @@ def call_llm_api(prompt: str, config: Dict[str, Any]) -> str:
     # 仅返回周报正文内容，不输出模型的思考过程
     # 同时清理模型可能残留的对话式开头语（如"好的，根据您提供的数据..."）
     return strip_chat_prefix(content)
+
+
+def call_llm_chat(
+    messages: list,
+    config: Dict[str, Any],
+    system_prompt: str = None,
+) -> str:
+    """多轮对话调用（供钉钉 AI 机器人等问答场景使用）。
+
+    Args:
+        messages: 对话历史 [{role: "user"|"assistant", content: str}, ...]，
+                  仅传入用户/助手的交替消息，系统人设由 system_prompt 单独预设
+        config: 全局配置
+        system_prompt: 预设系统提示词（人设参数），如"你是天喻软件的 AI 周报机器人…"，
+                      为 None 时使用周报默认人设
+
+    Returns:
+        模型回答文本（自动移除思考过程块，保留最终回答）
+    """
+    provider_name, prov = _validate_provider_config(config)
+    base_url = prov["base_url"]
+    model = prov["model"]
+
+    headers, payload = _build_request_payload(
+        "", prov, config, system_prompt=system_prompt, messages=messages
+    )
+
+    print(f"[INFO] 调用 {provider_name} / {model} 回答用户问题...")
+
+    response = _send_http_request(
+        base_url, headers, payload, config, func_name=f"{provider_name}/{model}"
+    )
+    _handle_http_error(response, provider_name, base_url, model)
+    content, usage = _parse_llm_response(response, provider_name)
+    _print_token_usage(usage)
+
+    # 移除思考模式的思考过程块（如 <think>...</think>），避免泄露给用户
+    return strip_thinking_block(content)
+
+
+def strip_thinking_block(text: str) -> str:
+    """移除模型输出中的思考过程块（如 <think>...</think>），仅保留最终回答。
+
+    Args:
+        text: 模型原始输出
+
+    Returns:
+        清理后的回答文本；若清理后为空则保留原文
+    """
+    if not text:
+        return text
+    cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    return cleaned or text

@@ -146,13 +146,15 @@ def _is_invalid_row(task_name: str, project: str, description: str) -> bool:
     return False
 
 
-def collect_tasks_from_excel(file_path: Path) -> List[str]:
+def collect_tasks_from_excel(file_path: Path,
+                             max_chars_per_sheet: Optional[int] = None) -> List[str]:
     """从单个 Excel 文件中提取 B/D/H 三列并按行合并为记录列表。
 
     每行合并格式：「任务名称 | 项目/需求 | 工作描述」
     - 若某列为空则跳过该部分
     - 自动跳过表头、空值、汇总行、纯序号行
     - 保留原始顺序
+    - max_chars_per_sheet 为正数时，单个 Sheet 汇总文本达到该上限后停止追加（防止超 token）
     """
     try:
         xls = pd.ExcelFile(
@@ -163,7 +165,10 @@ def collect_tasks_from_excel(file_path: Path) -> List[str]:
         try:
             xls = pd.ExcelFile(file_path)
         except Exception as e2:
-            print(f"  [WARN] 读取失败 {file_path.name}: {e2}")
+            hint = ""
+            if file_path.suffix.lower() == ".xls":
+                hint = "（读取 .xls 需要 xlrd 库，请执行: pip install xlrd>=2.0.1）"
+            print(f"  [WARN] 读取失败 {file_path.name}: {e2} {hint}")
             return []
 
     records: List[str] = []
@@ -191,6 +196,7 @@ def collect_tasks_from_excel(file_path: Path) -> List[str]:
         series_d = df[col_d] if col_d else None
         series_h = df[col_h] if col_h else None
 
+        sheet_chars = 0
         for i in range(len(df)):
             task_name = _clean_cell(series_b.iloc[i])
             project = _clean_cell(series_d.iloc[i]) if series_d is not None else ""
@@ -209,7 +215,15 @@ def collect_tasks_from_excel(file_path: Path) -> List[str]:
                 parts.append(f"描述：{description}")
             if not parts:
                 continue
-            records.append(" | ".join(parts))
+            record = " | ".join(parts)
+
+            # 单 Sheet 汇总文本长度上限（防止超 token）
+            if max_chars_per_sheet and sheet_chars + len(record) > max_chars_per_sheet:
+                print(f"  [WARN] Sheet '{sheet_name}' 汇总文本已达上限 "
+                      f"{max_chars_per_sheet} 字符，该 Sheet 剩余行已截断")
+                break
+            sheet_chars += len(record)
+            records.append(record)
 
     return records
 
@@ -245,7 +259,8 @@ def aggregate_excel_content(config: Dict[str, Any],
 
     print(f"[INFO] 处理 Excel 文件: {files[0].name}")
 
-    records = collect_tasks_from_excel(files[0])
+    max_chars = config.get("max_chars_per_sheet", 30000)
+    records = collect_tasks_from_excel(files[0], max_chars_per_sheet=max_chars)
     # 单文件内去重（保留首次出现的顺序）
     seen = set()
     unique_tasks: List[str] = []
