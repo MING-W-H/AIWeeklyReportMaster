@@ -25,6 +25,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
+from logger import get_logger
+
+logger = get_logger(__name__)
+
 
 # ============ 列定义 ============
 # CRM 下载的 Excel 列结构：
@@ -115,7 +119,7 @@ def _resolve_columns_by_header(df: "pd.DataFrame") -> Dict[str, Optional[str]]:
             # 回退到列字母
             result[target] = _resolve_column_by_letter(df, fallback_letter)
             if result[target]:
-                print(f"  [DEBUG] 表头「{target}」未匹配，回退到列字母 {fallback_letter}")
+                logger.debug("表头「%s」未匹配，回退到列字母 %s", target, fallback_letter)
     return result
 
 
@@ -168,7 +172,7 @@ def collect_tasks_from_excel(file_path: Path,
             hint = ""
             if file_path.suffix.lower() == ".xls":
                 hint = "（读取 .xls 需要 xlrd 库，请执行: pip install xlrd>=2.0.1）"
-            print(f"  [WARN] 读取失败 {file_path.name}: {e2} {hint}")
+            logger.warning("读取失败 %s: %s %s", file_path.name, e2, hint)
             return []
 
     records: List[str] = []
@@ -176,7 +180,7 @@ def collect_tasks_from_excel(file_path: Path,
         try:
             df = xls.parse(sheet_name, header=0)
         except Exception as e:
-            print(f"  [WARN] Sheet '{sheet_name}' 读取失败: {e}")
+            logger.warning("Sheet '%s' 读取失败: %s", sheet_name, e)
             continue
 
         if df.empty or df.shape[1] == 0:
@@ -189,7 +193,7 @@ def collect_tasks_from_excel(file_path: Path,
         col_h = resolved.get("工作描述")  # 工作描述
 
         if col_b is None:
-            print(f"  [WARN] {file_path.name} Sheet '{sheet_name}' 列数不足，无法定位 B 列")
+            logger.warning("%s Sheet '%s' 列数不足，无法定位 B 列", file_path.name, sheet_name)
             continue
 
         series_b = df[col_b]
@@ -219,8 +223,8 @@ def collect_tasks_from_excel(file_path: Path,
 
             # 单 Sheet 汇总文本长度上限（防止超 token）
             if max_chars_per_sheet and sheet_chars + len(record) > max_chars_per_sheet:
-                print(f"  [WARN] Sheet '{sheet_name}' 汇总文本已达上限 "
-                      f"{max_chars_per_sheet} 字符，该 Sheet 剩余行已截断")
+                logger.warning("Sheet '%s' 汇总文本已达上限 %d 字符，该 Sheet 剩余行已截断",
+                               sheet_name, max_chars_per_sheet)
                 break
             sheet_chars += len(record)
             records.append(record)
@@ -257,7 +261,7 @@ def aggregate_excel_content(config: Dict[str, Any],
         # 只取最新修改的一个文件，不做多文件合并
         files = [max(files, key=lambda p: p.stat().st_mtime)]
 
-    print(f"[INFO] 处理 Excel 文件: {files[0].name}")
+    logger.info("处理 Excel 文件: %s", files[0].name)
 
     max_chars = config.get("max_chars_per_sheet", 30000)
     records = collect_tasks_from_excel(files[0], max_chars_per_sheet=max_chars)
@@ -269,7 +273,7 @@ def aggregate_excel_content(config: Dict[str, Any],
             seen.add(record)
             unique_tasks.append(record)
 
-    print(f"[INFO] B/D/H 三列合并记录原始条目数: {len(records)}，去重后剩余: {len(unique_tasks)}")
+    logger.info("B/D/H 三列合并记录原始条目数: %d，去重后剩余: %d", len(records), len(unique_tasks))
 
     # 注意：以下过程性元信息仅用于 Python 端控制台日志，不写入汇总文本
     # 以免 AI 在周报中引用"来源文件数/条目数/去重后条目数"等数据汇总过程信息
@@ -280,5 +284,5 @@ def aggregate_excel_content(config: Dict[str, Any],
         lines.append(f"{idx}. {task}")
 
     full_text = "\n".join(lines)
-    print(f"[INFO] Excel 汇总完成，接下来交由 AI 优化...")
+    logger.info("Excel 汇总完成，接下来交由 AI 优化...")
     return full_text

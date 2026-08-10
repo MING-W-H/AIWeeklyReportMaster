@@ -7,8 +7,8 @@
 
 使用方式：
     1. 按 userId 查询（推荐，最多一次 50 人）：
-       python attendance_checker.py --userids T0265,T0266,T0267
-       python attendance_checker.py --userids T0265 --start 2026-07-27 --end 2026-08-02
+       python attendance_checker.py --userids user001,user002,user003
+       python attendance_checker.py --userids user001 --start 2026-07-27 --end 2026-08-02
 
     2. 按部门查询（查询部门下全部成员，需通讯录读权限）：
        python attendance_checker.py --dept 872611
@@ -56,7 +56,10 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
 import requests
 
 from config_manager import load_config
+from logger import get_logger
 from retry_utils import retry_request
+
+logger = get_logger(__name__)
 
 # ============ 钉钉开放平台接口 ============
 _GETTOKEN_URL = "https://oapi.dingtalk.com/gettoken"
@@ -324,11 +327,11 @@ def _print_report(matrix: Dict[str, Dict[str, Dict[str, str]]],
     col_w = max(9, cells_width)
     for ds in day_strs:
         header += f"{ds:^{col_w}}"
-    print("=" * len(header))
-    print(f"钉钉考勤查询结果（{start:%Y-%m-%d} ~ {end:%Y-%m-%d}）")
-    print("=" * len(header))
-    print(header)
-    print("-" * len(header))
+    logger.info("=" * len(header))
+    logger.info("钉钉考勤查询结果（%s ~ %s）", start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
+    logger.info("=" * len(header))
+    logger.info("%s", header)
+    logger.info("-" * len(header))
 
     for uid in user_ids:
         name = names.get(uid, "")
@@ -337,11 +340,11 @@ def _print_report(matrix: Dict[str, Dict[str, Dict[str, str]]],
         for d in day_list:
             cell = _fmt_cell(matrix.get(uid, {}).get(d.strftime("%Y-%m-%d"), {}))
             row += f"{cell:^{col_w}}"
-        print(row)
+        logger.info("%s", row)
 
     # 汇总
-    print("-" * len(header))
-    print("汇总（各结果出现次数，含上班+下班卡）：")
+    logger.info("-" * len(header))
+    logger.info("汇总（各结果出现次数，含上班+下班卡）：")
     for uid in user_ids:
         name = names.get(uid, "")
         label = f"{name}({uid})" if name else uid
@@ -353,7 +356,7 @@ def _print_report(matrix: Dict[str, Dict[str, Dict[str, str]]],
                 parts.append(f"{cn}{n}")
         if not parts:
             parts.append("无打卡记录")
-        print(f"  {label:<20} {'，'.join(parts)}")
+        logger.info("  %s", f"{label:<20} {'，'.join(parts)}")
 
 
 def _date_list(start: datetime, end: datetime) -> List[datetime]:
@@ -413,7 +416,7 @@ def _export_excel(path: str, matrix: Dict[str, Dict[str, Dict[str, str]]],
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
         detail_df.to_excel(writer, sheet_name="明细", index=False)
         summary_df.to_excel(writer, sheet_name="汇总", index=False)
-    print(f"[INFO] 已导出 Excel: {path}")
+    logger.info("已导出 Excel: %s", path)
 
 
 # ============ 主流程 ============
@@ -423,8 +426,8 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例：\n"
-            "  python attendance_checker.py --userids T0265,T0266\n"
-            "  python attendance_checker.py --userids T0265 --start 2026-07-27 --end 2026-08-02\n"
+            "  python attendance_checker.py --userids user001,user002\n"
+            "  python attendance_checker.py --userids user001 --start 2026-07-27 --end 2026-08-02\n"
             "  python attendance_checker.py --dept 872611\n"
             "  python attendance_checker.py --excel\n"
             "  python attendance_checker.py --excel attendance.xlsx"
@@ -444,7 +447,7 @@ def main() -> int:
     try:
         app_key, app_secret = _get_credentials(config)
     except RuntimeError as e:
-        print(f"[ERROR] {e}")
+        logger.error("%s", e)
         return 1
 
     # 日期范围：--start/--end > config.json attendance.start_date/end_date > 默认最近 7 天
@@ -455,7 +458,7 @@ def main() -> int:
         try:
             return datetime.strptime(s, "%Y-%m-%d")
         except ValueError:
-            print(f"[ERROR] {name} 格式应为 YYYY-MM-DD")
+            logger.error("%s 格式应为 YYYY-MM-DD", name)
             raise SystemExit(1)
 
     end = today
@@ -472,31 +475,31 @@ def main() -> int:
     if start is None:
         start = end - timedelta(days=6)
     if start > end:
-        print("[ERROR] 开始日期不能晚于结束日期")
+        logger.error("开始日期不能晚于结束日期")
         return 1
 
-    print("[INFO] 正在获取钉钉 access_token ...")
+    logger.info("正在获取钉钉 access_token ...")
     token = _get_oapi_token(app_key, app_secret)
 
     # 确定用户列表
     if args.dept:
-        print(f"[INFO] 正在查询部门 {args.dept} 的成员 ...")
+        logger.info("正在查询部门 %s 的成员 ...", args.dept)
         members = _list_dept_members(token, args.dept)
         if not members:
-            print(f"[WARN] 部门 {args.dept} 下未查询到成员")
+            logger.warning("部门 %s 下未查询到成员", args.dept)
             return 0
         user_ids = [m["userid"] for m in members]
         names = {m["userid"]: m["name"] for m in members}
-        print(f"[INFO] 部门 {args.dept} 共 {len(user_ids)} 名成员")
+        logger.info("部门 %s 共 %d 名成员", args.dept, len(user_ids))
     elif args.userids:
         user_ids = [u.strip() for u in args.userids.split(",") if u.strip()]
         if len(user_ids) > _MAX_USERS_PER_REQUEST:
-            print(f"[ERROR] 单次最多查询 {_MAX_USERS_PER_REQUEST} 人")
+            logger.error("单次最多查询 %d 人", _MAX_USERS_PER_REQUEST)
             return 1
         names = _resolve_names(token, user_ids)
         found = [u for u in user_ids if names.get(u)]
         if found:
-            print(f"[INFO] 已解析 {len(found)}/{len(user_ids)} 个 userId 的姓名")
+            logger.info("已解析 %d/%d 个 userId 的姓名", len(found), len(user_ids))
     else:
         att_cfg = config.get("attendance", {})
         dt_cfg = config.get("dingtalk", {})
@@ -512,17 +515,17 @@ def main() -> int:
             ]
             user_ids = list(dict.fromkeys(user_ids))  # 去重保序
         if not user_ids:
-            print("[ERROR] 未指定用户：请使用 --userids 或 --dept，"
-                  "或在 config.json 的 attendance.user_ids 中配置")
+            logger.error("未指定用户：请使用 --userids 或 --dept，"
+                         "或在 config.json 的 attendance.user_ids 中配置")
             return 1
         names = _resolve_names(token, user_ids)
-        print(f"[INFO] 使用 config.json attendance.user_ids 名单，共 {len(user_ids)} 人")
+        logger.info("使用 config.json attendance.user_ids 名单，共 %d 人", len(user_ids))
 
     # 查询考勤
-    print(f"[INFO] 正在查询考勤 {start:%Y-%m-%d} ~ {end:%Y-%m-%d} ...")
+    logger.info("正在查询考勤 %s ~ %s ...", start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
     records = _fetch_attendance(token, user_ids, start, end)
     matrix = _build_matrix(records, user_ids)
-    print(f"[INFO] 共获取 {len(records)} 条打卡记录")
+    logger.info("共获取 %d 条打卡记录", len(records))
 
     # 输出
     _print_report(matrix, user_ids, names, start, end, records)
@@ -533,7 +536,7 @@ def main() -> int:
             excel_path = os.path.join(
                 output_folder, f"考勤_{start:%Y%m%d}-{end:%Y%m%d}.xlsx"
             )
-            print(f"[INFO] 未指定 --excel 路径，导出到配置文件夹: {output_folder}")
+            logger.info("未指定 --excel 路径，导出到配置文件夹: %s", output_folder)
         else:
             excel_path = args.excel
         _export_excel(excel_path, matrix, user_ids, names, start, end, records)

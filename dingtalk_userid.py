@@ -29,7 +29,6 @@
 """
 import argparse
 import asyncio
-import logging
 import sys
 
 if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
@@ -47,6 +46,9 @@ from dingtalk_confirmer import (
     list_dept_subs,
     _run_stream_listener,
 )
+from logger import get_logger
+
+logger = get_logger(__name__)
 
 try:
     import dingtalk_stream
@@ -59,10 +61,8 @@ except ImportError:
 if DINGTALK_STREAM_AVAILABLE:
     class WhoamiHandler(dingtalk_stream.ChatbotHandler):
 
-        def __init__(self, logger: logging.Logger, done_event: asyncio.Event,
-                     group_mode: bool = False):
+        def __init__(self, done_event: asyncio.Event, group_mode: bool = False):
             super().__init__()
-            self.logger = logger
             self.done_event = done_event
             self.group_mode = group_mode
 
@@ -76,26 +76,26 @@ if DINGTALK_STREAM_AVAILABLE:
             is_group = conv_type == "2"  # 1=单聊 2=群聊
             if self.group_mode and not is_group:
                 # --group 模式下忽略单聊消息，仅打印提示继续等待群聊消息
-                print("[INFO] 收到单聊消息，已忽略。请在目标钉钉群中 @ 机器人。")
+                logger.info("[INFO] 收到单聊消息，已忽略。请在目标钉钉群中 @ 机器人。")
                 return AckMessage.STATUS_OK, "OK"
-            print()
-            print("=" * 60)
+            logger.info("")
+            logger.info("=" * 60)
             if is_group:
-                print(f"收到群聊消息!（群名称: {conv_title or '未知'}）")
+                logger.info("收到群聊消息!（群名称: %s）", conv_title or "未知")
             else:
-                print("收到钉钉消息!")
-            print(f"  发送人昵称 : {nick}")
-            print(f"  发送人 userId: {staff_id}")
-            print(f"  会话类型   : {'群聊' if is_group else '单聊'}")
-            print(f"  conversationId: {conv_id}")
-            print("=" * 60)
+                logger.info("收到钉钉消息!")
+            logger.info("  发送人昵称 : %s", nick)
+            logger.info("  发送人 userId: %s", staff_id)
+            logger.info("  会话类型   : %s", "群聊" if is_group else "单聊")
+            logger.info("  conversationId: %s", conv_id)
+            logger.info("=" * 60)
             if is_group:
-                print("请将上述 conversationId 填入 config.json 的")
-                print("crm_reminder.conversation_id（或 dingtalk.open_conversation_id）中。")
+                logger.info("请将上述 conversationId 填入 config.json 的")
+                logger.info("crm_reminder.conversation_id（或 dingtalk.open_conversation_id）中。")
             else:
-                print("请将上述 userId 填入 config.json 的 dingtalk.approver_staff_ids")
-                print("或 dingtalk.recipient_staff_ids 中。")
-            print()
+                logger.info("请将上述 userId 填入 config.json 的 dingtalk.approver_staff_ids")
+                logger.info("或 dingtalk.recipient_staff_ids 中。")
+            logger.info("")
             # 不再向钉钉回复任何内容，避免与周报审核流程的 Stream 连接抢占消息
             self.done_event.set()
             return AckMessage.STATUS_OK, "OK"
@@ -105,10 +105,8 @@ else:
 
 async def _run_stream(app_key: str, app_secret: str, group_mode: bool = False) -> None:
     done_event = asyncio.Event()
-    logger = logging.getLogger("whoami")
-    logger.setLevel(logging.INFO)
 
-    handler = WhoamiHandler(logger, done_event, group_mode=group_mode)
+    handler = WhoamiHandler(done_event, group_mode=group_mode)
     credential = dingtalk_stream.Credential(app_key, app_secret)
     client = dingtalk_stream.DingTalkStreamClient(credential)
     client.register_callback_handler(
@@ -118,7 +116,7 @@ async def _run_stream(app_key: str, app_secret: str, group_mode: bool = False) -
     try:
         await asyncio.wait_for(done_event.wait(), timeout=300)
     except asyncio.TimeoutError:
-        print("[INFO] 等待 5 分钟未收到消息，已退出。请重新运行后尽快发送消息。")
+        logger.info("[INFO] 等待 5 分钟未收到消息，已退出。请重新运行后尽快发送消息。")
     finally:
         try:
             if client.websocket is not None:
@@ -148,7 +146,7 @@ def main() -> int:
     try:
         app_key, app_secret = _get_credentials(dt_cfg)
     except ValueError as e:
-        print(f"[ERROR] {e}")
+        logger.error("%s", e)
         return 1
 
     # 方式 0：列出子部门
@@ -156,18 +154,18 @@ def main() -> int:
         try:
             subs = list_dept_subs(config, args.list_dept)
         except RuntimeError as e:
-            print(f"[ERROR] {e}")
+            logger.error("%s", e)
             return 2
         if not subs:
-            print(f"[WARN] 部门 {args.list_dept} 下没有子部门")
+            logger.warning("部门 %s 下没有子部门", args.list_dept)
             return 0
-        print("=" * 60)
-        print(f"部门 {args.list_dept} 下的子部门（共 {len(subs)} 个）：")
-        print("=" * 60)
+        logger.info("=" * 60)
+        logger.info("部门 %s 下的子部门（共 %d 个）：", args.list_dept, len(subs))
+        logger.info("=" * 60)
         for d in subs:
-            print(f"  {d['id']}: {d['name']}")
-        print()
-        print("请使用 --dept <部门ID> 查询对应部门成员。")
+            logger.info("  %s: %s", d["id"], d["name"])
+        logger.info("")
+        logger.info("请使用 --dept <部门ID> 查询对应部门成员。")
         return 0
 
     # 方式 2：按手机号查询
@@ -175,16 +173,16 @@ def main() -> int:
         try:
             user_id = get_userid_by_mobile(config, args.mobile)
         except RuntimeError as e:
-            print(f"[ERROR] {e}")
+            logger.error("%s", e)
             return 2
         if not user_id:
-            print(f"[WARN] 未查询到手机号 {args.mobile} 对应的成员")
+            logger.warning("未查询到手机号 %s 对应的成员", args.mobile)
             return 2
-        print("=" * 60)
-        print(f"手机号 {args.mobile} 对应的 userId: {user_id}")
-        print("=" * 60)
-        print("请将此 userId 填入 config.json 的 dingtalk.approver_staff_ids")
-        print("或 dingtalk.recipient_staff_ids 中。")
+        logger.info("=" * 60)
+        logger.info("手机号 %s 对应的 userId: %s", args.mobile, user_id)
+        logger.info("=" * 60)
+        logger.info("请将此 userId 填入 config.json 的 dingtalk.approver_staff_ids")
+        logger.info("或 dingtalk.recipient_staff_ids 中。")
         return 0
 
     # 方式 3：按部门列出成员
@@ -192,46 +190,46 @@ def main() -> int:
         try:
             members = list_dept_members(config, args.dept)
         except RuntimeError as e:
-            print(f"[ERROR] {e}")
+            logger.error("%s", e)
             return 2
         if not members:
-            print(f"[WARN] 部门 {args.dept} 下未查询到成员")
+            logger.warning("部门 %s 下未查询到成员", args.dept)
             return 0
-        print("=" * 60)
-        print(f"部门 {args.dept} 共 {len(members)} 名成员：")
-        print("=" * 60)
+        logger.info("=" * 60)
+        logger.info("部门 %s 共 %d 名成员：", args.dept, len(members))
+        logger.info("=" * 60)
         for m in members:
             title = f"（{m['title']}）" if m["title"] else ""
-            print(f"  {m['name']}{title}: {m['userid']}")
-        print()
-        print("请将需要的 userId 填入 config.json 的钉钉配置中。")
+            logger.info("  %s%s: %s", m["name"], title, m["userid"])
+        logger.info("")
+        logger.info("请将需要的 userId 填入 config.json 的钉钉配置中。")
         return 0
 
     # 方式 1（默认）：消息触发
     if not DINGTALK_STREAM_AVAILABLE:
-        print("[ERROR] 未安装 dingtalk-stream，请先执行: pip install dingtalk-stream")
+        logger.error("未安装 dingtalk-stream，请先执行: pip install dingtalk-stream")
         return 1
 
-    print("=" * 60)
+    logger.info("=" * 60)
     if args.group:
-        print("钉钉群会话 ID 查询工具（群消息触发模式）")
-        print("=" * 60)
-        print("已启动 Stream 长连接，请执行以下操作：")
-        print("  1. 打开目标钉钉群（如图形组群）")
-        print("  2. 在群内 @ 机器人并发送任意一条消息")
-        print("  3. 本程序将打印该群的 conversationId 并自动退出")
-        print("（5 分钟无消息自动退出；单聊消息将被忽略）")
-        print()
+        logger.info("钉钉群会话 ID 查询工具（群消息触发模式）")
+        logger.info("=" * 60)
+        logger.info("已启动 Stream 长连接，请执行以下操作：")
+        logger.info("  1. 打开目标钉钉群（如项目群）")
+        logger.info("  2. 在群内 @ 机器人并发送任意一条消息")
+        logger.info("  3. 本程序将打印该群的 conversationId 并自动退出")
+        logger.info("（5 分钟无消息自动退出；单聊消息将被忽略）")
+        logger.info("")
     else:
-        print("钉钉 userId 查询工具（消息触发模式）")
-        print("=" * 60)
-        print("已启动 Stream 长连接，请执行以下操作：")
-        print("  1. 打开钉钉客户端")
-        print("  2. 顶部搜索您创建的机器人名称，进入单聊")
-        print("  3. 发送任意一条消息（如：我是谁）")
-        print("  4. 本程序将打印发送人 userId 并自动退出")
-        print("（5 分钟无消息自动退出）")
-        print()
+        logger.info("钉钉 userId 查询工具（消息触发模式）")
+        logger.info("=" * 60)
+        logger.info("已启动 Stream 长连接，请执行以下操作：")
+        logger.info("  1. 打开钉钉客户端")
+        logger.info("  2. 顶部搜索您创建的机器人名称，进入单聊")
+        logger.info("  3. 发送任意一条消息（如：我是谁）")
+        logger.info("  4. 本程序将打印发送人 userId 并自动退出")
+        logger.info("（5 分钟无消息自动退出）")
+        logger.info("")
 
     asyncio.run(_run_stream(app_key, app_secret, group_mode=args.group))
     return 0

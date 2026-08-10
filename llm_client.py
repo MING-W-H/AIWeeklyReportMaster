@@ -10,9 +10,12 @@ import re
 
 import requests
 
+from logger import get_logger
 from retry_utils import retry_request
 
 from text_utils import strip_chat_prefix
+
+logger = get_logger(__name__)
 
 
 # ============ 默认系统提示词（周报生成场景） ============
@@ -352,8 +355,8 @@ def _parse_llm_response(
     return content, usage
 
 
-def _print_token_usage(usage: Dict[str, Any]) -> None:
-    """打印 token 使用统计信息。
+def _log_token_usage(usage: Dict[str, Any]) -> None:
+    """记录 token 使用统计信息。
 
     Args:
         usage: OpenAI 兼容协议的 usage 字典
@@ -368,12 +371,12 @@ def _print_token_usage(usage: Dict[str, Any]) -> None:
         else 0
     )
 
-    print(f"[INFO] Token 使用统计:")
-    print(f"       - 输入 Prompt tokens : {prompt_tokens:,}")
+    logger.info("Token 使用统计:")
+    logger.info("       - 输入 Prompt tokens : %s", f"{prompt_tokens:,}")
     if reasoning_tokens:
-        print(f"       - 其中思考 tokens    : {reasoning_tokens:,}")
-    print(f"       - 输出 Completion    : {completion_tokens:,}")
-    print(f"       - 总计 Total tokens  : {total_tokens:,}")
+        logger.info("       - 其中思考 tokens    : %s", f"{reasoning_tokens:,}")
+    logger.info("       - 输出 Completion    : %s", f"{completion_tokens:,}")
+    logger.info("       - 总计 Total tokens  : %s", f"{total_tokens:,}")
 
 
 def call_llm_api(prompt: str, config: Dict[str, Any]) -> str:
@@ -390,11 +393,11 @@ def call_llm_api(prompt: str, config: Dict[str, Any]) -> str:
     # 2. 构建请求
     headers, payload = _build_request_payload(prompt, prov, config)
 
-    # 3. 打印调用信息
-    print(f"[INFO] 调用 {provider_name} / {model} 生成周报中...")
+    # 3. 记录调用信息
+    logger.info("调用 %s / %s 生成周报中...", provider_name, model)
     if config.get("thinking_enabled"):
         thinking_status = "enabled" if prov.get("thinking_param") else "not supported by this provider"
-        print(f"[INFO] 思考模式: {thinking_status}")
+        logger.info("思考模式: %s", thinking_status)
 
     # 4. 发起 HTTP 请求
     response = _send_http_request(
@@ -407,8 +410,8 @@ def call_llm_api(prompt: str, config: Dict[str, Any]) -> str:
     # 6. 解析响应
     content, usage = _parse_llm_response(response, provider_name)
 
-    # 7. 打印 token 统计
-    _print_token_usage(usage)
+    # 7. 记录 token 统计
+    _log_token_usage(usage)
 
     # 仅返回周报正文内容，不输出模型的思考过程
     # 同时清理模型可能残留的对话式开头语（如"好的，根据您提供的数据..."）
@@ -426,7 +429,7 @@ def call_llm_chat(
         messages: 对话历史 [{role: "user"|"assistant", content: str}, ...]，
                   仅传入用户/助手的交替消息，系统人设由 system_prompt 单独预设
         config: 全局配置
-        system_prompt: 预设系统提示词（人设参数），如"你是天喻软件的 AI 周报机器人…"，
+        system_prompt: 预设系统提示词（人设参数），如"你是公司的 AI 周报机器人…"，
                       为 None 时使用周报默认人设
 
     Returns:
@@ -440,14 +443,14 @@ def call_llm_chat(
         "", prov, config, system_prompt=system_prompt, messages=messages
     )
 
-    print(f"[INFO] 调用 {provider_name} / {model} 回答用户问题...")
+    logger.info("调用 %s / %s 回答用户问题...", provider_name, model)
 
     response = _send_http_request(
         base_url, headers, payload, config, func_name=f"{provider_name}/{model}"
     )
     _handle_http_error(response, provider_name, base_url, model)
     content, usage = _parse_llm_response(response, provider_name)
-    _print_token_usage(usage)
+    _log_token_usage(usage)
 
     # 移除思考模式的思考过程块（如 <think>...</think>），避免泄露给用户
     return strip_thinking_block(content)

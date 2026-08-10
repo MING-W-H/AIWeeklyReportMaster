@@ -41,7 +41,7 @@
 - **环境变量支持**：API Key、邮箱密码、CRM Token 均可通过环境变量注入，便于 CI/CD
 - **定时任务**：支持注册 Windows 计划任务，每周一自动执行
 - **节假日检查**：自动跳过法定节假日和周末，支持调休上班日判断
-- **钉钉 AI 问答机器人**：将钉钉机器人接入大模型，用户可直接向机器人提问，由大模型结合预设人设参数（如"你是天喻软件的 AI 周报机器人"）自动回答
+- **钉钉 AI 问答机器人**：将钉钉机器人接入大模型，用户可直接向机器人提问，由大模型结合预设人设参数（如"你是公司的 AI 周报机器人"）自动回答
 
 ---
 
@@ -174,6 +174,7 @@ python weekly_report.py
     "user_oid_list": [],
     "project_oid_list": [],
     "download_dir": "excel_files",
+    "export_prefix": "",
     "timeout": 60
   },
   "email": {
@@ -309,6 +310,7 @@ python weekly_report.py --provider opencode --model gpt-5.5
     "user_oid_list": [],
     "project_oid_list": [],
     "download_dir": "excel_files",
+    "export_prefix": "",
     "timeout": 60
   }
 }
@@ -327,6 +329,7 @@ python weekly_report.py --provider opencode --model gpt-5.5
 | `user_oid_list`    | 用户 OID 列表（可选，留空表示查整个组织）        | `[]`                                            |
 | `project_oid_list` | 项目 OID 列表（可选，留空表示不限定项目）        | `[]`                                            |
 | `download_dir`     | 下载保存目录（相对脚本目录或绝对路径）           | `excel_files`                                   |
+| `export_prefix`    | 下载文件名前缀（如团队名），如 `{prefix}2026.7.13-7.17.xlsx`，留空则不带前缀 | `` |
 | `timeout`          | CRM 接口请求超时（秒）                           | `60`                                            |
 
 ### 日期范围计算
@@ -617,7 +620,7 @@ python weekly_report.py --no-confirm
 ```
 
 - **预设人设参数**：`chatbot.system_prompt` 中可配置机器人的身份与行为约束
-  （如"你是天喻软件的 AI 周报机器人…"），每次调用都会作为 System Prompt 传给大模型
+  （如"你是公司的 AI 周报机器人…"），每次调用都会作为 System Prompt 传给大模型
 - **多轮对话**：按会话（单聊按人、群聊按群）保留最近 N 轮上下文，支持追问
 - **权限控制**：`chatbot.allow_user_ids` 白名单（留空则允许所有员工）
 - **群聊**：仅在 @ 机器人时响应；**单聊**：任意消息均响应
@@ -644,7 +647,7 @@ python dingtalk_chatbot.py --debug
 {
   "chatbot": {
     "enabled": true,
-    "system_prompt": "你是天喻软件（InteVue）的 AI 周报机器人，由天喻软件内部开发，服务于公司员工。你可以回答与天喻软件、周报系统、CRM 工时填写、公司日常事务等相关的各类问题。\n\n行为准则：\n1. 使用简体中文回答，语言专业、简洁、友好\n2. 涉及不确定或不清楚的信息时，如实说明，不要编造\n3. 涉及个人隐私或公司机密的信息，礼貌地表示不便回答\n4. 回答先给结论再给理由，不要使用 Markdown 表格",
+    "system_prompt": "你是公司的 AI 周报机器人，由公司内部开发，服务于员工。你可以回答与周报系统、CRM 工时填写、公司日常事务等相关的各类问题。\n\n行为准则：\n1. 使用简体中文回答，语言专业、简洁、友好\n2. 涉及不确定或不清楚的信息时，如实说明，不要编造\n3. 涉及个人隐私或公司机密的信息，礼貌地表示不便回答\n4. 回答先给结论再给理由，不要使用 Markdown 表格",
     "allow_user_ids": [],
     "max_history_turns": 10,
     "max_reply_chars": 8000,
@@ -669,7 +672,7 @@ python dingtalk_chatbot.py --debug
 ```json
 {
   "chatbot": {
-    "system_prompt": "你是天喻软件的 AI 周报助手，擅长周报写作、CRM 工时填写指导。请始终使用简体中文、友好简洁地回答，涉及不确定的信息要如实说明。"
+    "system_prompt": "你是公司的 AI 周报助手，擅长周报写作、CRM 工时填写指导。请始终使用简体中文、友好简洁地回答，涉及不确定的信息要如实说明。"
   }
 }
 ```
@@ -748,17 +751,20 @@ Get-ChildItem "logs\*.txt" | Sort-Object LastWriteTime -Descending | Select-Obje
 - **调休上班日**（周末补班）：正常执行
 - **普通周末**：跳过执行
 
-#### 判断逻辑（三层优先级）
+#### 判断逻辑（按年份动态获取，支持任意年份）
 
 ```
-1. 本地硬编码节假日规则（最高优先级）
+1. 当年硬编码节假日规则（最高优先级，官方公告年份离线可用）
    ├── 调休上班日（如 2026-10-10 周六补班）→ 正常执行
    └── 法定节假日（如 2026-10-01 国庆）→ 跳过执行
         ↓ 都不匹配
-2. 在线 API (timor.tech)
+2. 该年整年数据（timor.tech 整年 API，首次查询后写入本地缓存）
+   └── 节假日 → 跳过执行；调休上班 → 正常执行；未列出的日期按周末判断
+        ↓ 整年数据获取失败时
+3. 单日 API (timor.tech) 兜底
    └── 查询每天的 type: 0=工作日 1=节假日 2=调休 3=周末
         ↓ API 不可用时
-3. 周末规则
+4. 周末规则
    └── 周六/周日 → 跳过执行
 ```
 
@@ -772,17 +778,19 @@ python weekly_report.py --force
 
 #### 更新节假日规则
 
-每年国务院发布放假通知后，需要更新 [holiday_checker.py](holiday_checker.py) 中的 `HARDCODED_HOLIDAYS` 字典：
+每年国务院发布放假通知后，需要更新 [holiday_checker.py](holiday_checker.py) 中的 `HARDCODED_HOLIDAYS` 字典（按年份追加）。未硬编码的年份会自动通过在线整年 API 获取，无需额外配置：
 
 ```python
 HARDCODED_HOLIDAYS = {
-    # 法定节假日（type=1）
-    "2026-10-01": ("国庆节", 1),
-    "2026-10-02": ("国庆节", 1),
-    # ...
-    # 调休上班日（type=2）
-    "2026-10-10": ("国庆节后调休", 2),
-    # ...
+    "2026": {
+        # 法定节假日（type=1）
+        "2026-10-01": ("国庆节", 1),
+        "2026-10-02": ("国庆节", 1),
+        # ...
+        # 调休上班日（type=2）
+        "2026-10-10": ("国庆节后调休", 2),
+        # ...
+    },
 }
 ```
 

@@ -52,6 +52,7 @@
     "user_oid_list": [],
     "project_oid_list": [],
     "download_dir": "excel_files",
+    "export_prefix": "",
     "timeout": 60,
     "login_url": "https://crm.example.com/rest/userService/v1/user/userLoginPlm",
     "username": "",

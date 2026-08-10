@@ -150,7 +150,7 @@ sequenceDiagram
 
     alt HTTP 200
         CRM->>CRM: 解析响应 (Excel 二进制 / JSON base64)
-        CRM->>FS: 保存 Excel 文件<br/>可视化团队{range}.xlsx
+        CRM->>FS: 保存 Excel 文件<br/>{prefix}{range}.xlsx
         CRM-->>Main: 返回 Path
     else HTTP 4xx/5xx
         CRM-->>CRM: 抛出 RuntimeError
@@ -235,21 +235,21 @@ flowchart TD
 
 | 文件 | 职责 |
 |------|------|
-| [weekly_report.py](file:///c:/Users/w/Desktop/InteVueWeb/AIWeeklyReportMaster/weekly_report.py) | 主入口，编排全流程 |
-| [config_manager.py](file:///c:/Users/w/Desktop/InteVueWeb/AIWeeklyReportMaster/config_manager.py) | 加载配置、默认值合并、环境变量覆盖、通知模板渲染 |
-| [holiday_checker.py](file:///c:/Users/w/Desktop/InteVueWeb/AIWeeklyReportMaster/holiday_checker.py) | 节假日检查（硬编码 > 在线 API > 缓存 > 周末规则） |
-| [crm_downloader.py](file:///c:/Users/w/Desktop/InteVueWeb/AIWeeklyReportMaster/crm_downloader.py) | CRM 工时 Excel 下载、Token 自动刷新 |
-| [excel_aggregator.py](file:///c:/Users/w/Desktop/InteVueWeb/AIWeeklyReportMaster/excel_aggregator.py) | 提取 B/D/H 三列、单文件内去重 |
-| [llm_client.py](file:///c:/Users/w/Desktop/InteVueWeb/AIWeeklyReportMaster/llm_client.py) | LLM API 调用、OpenAI 兼容协议 |
-| [dingtalk_confirmer.py](file:///c:/Users/w/Desktop/InteVueWeb/AIWeeklyReportMaster/dingtalk_confirmer.py) | 钉钉审核流程、Stream 长连接、失败告警 |
-| [email_sender.py](file:///c:/Users/w/Desktop/InteVueWeb/AIWeeklyReportMaster/email_sender.py) | 腾讯企业邮箱 SMTP 发送 |
-| [output_resolver.py](file:///c:/Users/w/Desktop/InteVueWeb/AIWeeklyReportMaster/output_resolver.py) | 输出路径解析、日期占位符替换 |
-| [logger.py](file:///c:/Users/w/Desktop/InteVueWeb/AIWeeklyReportMaster/logger.py) | 日志系统（tee stdout/stderr 到文件） |
-| [retry_utils.py](file:///c:/Users/w/Desktop/InteVueWeb/AIWeeklyReportMaster/retry_utils.py) | 通用 HTTP 重试工具（指数退避） |
-| [text_utils.py](file:///c:/Users/w/Desktop/InteVueWeb/AIWeeklyReportMaster/text_utils.py) | 文本清洗、Markdown 转 HTML |
-| [dingtalk_userid.py](file:///c:/Users/w/Desktop/InteVueWeb/AIWeeklyReportMaster/dingtalk_userid.py) | 钉钉 userId 查询工具 |
-| [dingtalk_send_notice.py](file:///c:/Users/w/Desktop/InteVueWeb/AIWeeklyReportMaster/dingtalk_send_notice.py) | 钉钉通知发送工具 |
-| [diagnose_email.py](file:///c:/Users/w/Desktop/InteVueWeb/AIWeeklyReportMaster/diagnose_email.py) | 邮箱 SMTP 诊断工具 |
+| [weekly_report.py](weekly_report.py) | 主入口，编排全流程 |
+| [config_manager.py](config_manager.py) | 加载配置、默认值合并、环境变量覆盖、通知模板渲染 |
+| [holiday_checker.py](holiday_checker.py) | 节假日检查（硬编码 > 在线 API > 缓存 > 周末规则） |
+| [crm_downloader.py](crm_downloader.py) | CRM 工时 Excel 下载、Token 自动刷新 |
+| [excel_aggregator.py](excel_aggregator.py) | 提取 B/D/H 三列、单文件内去重 |
+| [llm_client.py](llm_client.py) | LLM API 调用、OpenAI 兼容协议 |
+| [dingtalk_confirmer.py](dingtalk_confirmer.py) | 钉钉审核流程、Stream 长连接、失败告警 |
+| [email_sender.py](email_sender.py) | 企业邮箱 SMTP 发送 |
+| [output_resolver.py](output_resolver.py) | 输出路径解析、日期占位符替换 |
+| [logger.py](logger.py) | 日志系统（tee stdout/stderr 到文件） |
+| [retry_utils.py](retry_utils.py) | 通用 HTTP 重试工具（指数退避） |
+| [text_utils.py](text_utils.py) | 文本清洗、Markdown 转 HTML |
+| [dingtalk_userid.py](dingtalk_userid.py) | 钉钉 userId 查询工具 |
+| [dingtalk_send_notice.py](dingtalk_send_notice.py) | 钉钉通知发送工具 |
+| [diagnose_email.py](diagnose_email.py) | 邮箱 SMTP 诊断工具 |
 
 ## 七、退出码定义
 

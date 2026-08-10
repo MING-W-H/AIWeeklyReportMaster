@@ -20,6 +20,9 @@ from typing import Any, Dict
 
 from output_resolver import calc_last_week_range
 from text_utils import markdown_to_html
+from logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def send_report_email(
@@ -114,22 +117,22 @@ def send_report_email(
 
     # 发送邮件（腾讯企业邮箱使用 SSL）
     all_recipients = list(recipients) + list(cc)
-    print(f"[INFO] 正在通过 {smtp_host}:{smtp_port} 发送周报邮件...")
-    print(f"       发件人: {sender}")
-    print(f"       收件人: {', '.join(recipients)}")
+    logger.info("正在通过 %s:%s 发送周报邮件...", smtp_host, smtp_port)
+    logger.info("       发件人: %s", sender)
+    logger.info("       收件人: %s", ", ".join(recipients))
     if cc:
-        print(f"       抄  送: {', '.join(cc)}")
-    print(f"       主  题: {subject}")
+        logger.info("       抄  送: %s", ", ".join(cc))
+    logger.info("       主  题: %s", subject)
     if email_cfg.get("attach_report", True) and report_path.exists():
-        print(f"       附件 1: {report_path.name}")
+        logger.info("       附件 1: %s", report_path.name)
     if excel_path is not None and Path(excel_path).exists():
-        print(f"       附件 2: {Path(excel_path).name}")
+        logger.info("       附件 2: %s", Path(excel_path).name)
 
     try:
         with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=30) as server:
             server.login(sender, password)
             server.sendmail(sender, all_recipients, msg.as_string())
-        print("[INFO] 周报邮件发送成功!")
+        logger.info("周报邮件发送成功!")
     except smtplib.SMTPAuthenticationError:
         raise RuntimeError(
             f"邮箱鉴权失败：请检查 email.sender='{sender}' 和 email.password 是否正确。"

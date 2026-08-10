@@ -25,7 +25,6 @@ import argparse
 import logging
 import os
 import sys
-import traceback
 import warnings
 from pathlib import Path
 from typing import Optional
@@ -48,9 +47,10 @@ from email_sender import send_report_email
 from excel_aggregator import aggregate_excel_content
 from holiday_checker import should_skip_execution
 from llm_client import FORMAT_TEMPLATES, build_prompt, call_llm_api
-from logger import init_logging
+from logger import get_logger, init_logging
 from output_resolver import render_template, resolve_output_path
 
+logger = get_logger(__name__)
 
 LOCK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".weekly_report.lock")
 
@@ -77,13 +77,13 @@ def _acquire_lock() -> bool:
             with open(LOCK_FILE, "r", encoding="utf-8") as f:
                 old_pid = int(f.read().strip() or "0")
             if old_pid and _pid_alive(old_pid):
-                print(f"[ERROR] 已有周报进程 (PID {old_pid}) 正在运行，请勿重复启动。")
-                print("[INFO] 若确认该进程已结束，请删除文件: .weekly_report.lock 后重试")
+                logger.error("已有周报进程 (PID %s) 正在运行，请勿重复启动。", old_pid)
+                logger.info("若确认该进程已结束，请删除文件: .weekly_report.lock 后重试")
                 return False
         with open(LOCK_FILE, "w", encoding="utf-8") as f:
             f.write(str(os.getpid()))
     except (OSError, ValueError) as e:
-        print(f"[WARN] 单实例锁初始化失败（不影响运行）: {e}")
+        logger.warning("单实例锁初始化失败（不影响运行）: %s", e)
     return True
 
 
@@ -184,7 +184,7 @@ def init_run_logging(config: dict, debug: bool):
     else:
         run_label = render_template(config.get("output_file_template") or "Vue{date}周报")
     log_path = init_logging(run_label, debug=debug)
-    print(f"[INFO] 运行日志已保存至: {log_path}")
+    logger.info("运行日志已保存至: %s", log_path)
     return log_path
 
 
@@ -198,9 +198,9 @@ def check_holiday_skip(force: bool, log_path) -> Optional[int]:
         return None
     should_skip, reason = should_skip_execution()
     if should_skip:
-        print(f"[INFO] {reason}")
-        print("[INFO] 如需强制执行，请使用: python weekly_report.py --force")
-        print(f"[INFO] 运行日志: {log_path}")
+        logger.info(reason)
+        logger.info("如需强制执行，请使用: python weekly_report.py --force")
+        logger.info("运行日志: %s", log_path)
         return ErrorCode.SUCCESS
     return None
 
@@ -216,15 +216,15 @@ def download_crm_if_enabled(
     crm_cfg = config.get("crm", {})
     if not crm_cfg.get("enabled") or args.no_crm:
         if args.no_crm:
-            print("[INFO] 已跳过 CRM 接口下载（--no-crm），使用本地 Excel 文件")
+            logger.info("已跳过 CRM 接口下载（--no-crm），使用本地 Excel 文件")
         else:
-            print("[INFO] CRM 接口未启用，使用本地 excel_folder 下的 Excel 文件")
+            logger.info("CRM 接口未启用，使用本地 excel_folder 下的 Excel 文件")
         return None, None
 
     try:
-        print("\n" + "=" * 60)
-        print("步骤 1/3: 从 CRM 接口下载工时 Excel")
-        print("=" * 60)
+        logger.info("=" * 60)
+        logger.info("步骤 1/3: 从 CRM 接口下载工时 Excel")
+        logger.info("=" * 60)
         downloaded_path = download_workhour_excel(
             config,
             start_date=args.crm_start,
@@ -232,14 +232,14 @@ def download_crm_if_enabled(
         )
         return downloaded_path, None
     except ValueError as e:
-        print(f"[ERROR] CRM 配置错误: {e}")
+        logger.error("CRM 配置错误: %s", e)
         return None, ErrorCode.CRM_ERROR
     except RuntimeError as e:
-        print(f"[ERROR] CRM 接口下载失败: {e}")
+        logger.error("CRM 接口下载失败: %s", e)
         send_failure_alert(config, f"CRM 下载失败: {e}")
         if args.debug:
-            traceback.print_exc()
-        print("[INFO] 可使用 --no-crm 跳过下载，直接使用本地 Excel 文件")
+            logger.debug("CRM 下载异常堆栈:", exc_info=True)
+        logger.info("可使用 --no-crm 跳过下载，直接使用本地 Excel 文件")
         return None, ErrorCode.CRM_ERROR
 
 
@@ -267,34 +267,34 @@ def generate_report_via_llm(
             break  # 成功后跳出
         except ValueError as e:
             # 配置类错误（如 api_key 缺失、provider 未知）
-            print(f"[ERROR] {provider_name} 配置错误: {e}")
+            logger.error("%s 配置错误: %s", provider_name, e)
             if idx < len(fallback_order) - 1:
-                print(f"[INFO] 尝试切换到下一个 provider: {fallback_order[idx + 1]}")
+                logger.info("尝试切换到下一个 provider: %s", fallback_order[idx + 1])
                 continue
             # 最后一个 provider 也配置错误
             return None, ErrorCode.LLM_ERROR
         except RuntimeError as e:
-            print(f"[WARN] {provider_name} 调用失败: {e}")
+            logger.warning("%s 调用失败: %s", provider_name, e)
             last_error = e
             if idx < len(fallback_order) - 1:
-                print(f"[INFO] 尝试切换到下一个 provider: {fallback_order[idx + 1]}")
+                logger.info("尝试切换到下一个 provider: %s", fallback_order[idx + 1])
                 continue
             break  # 所有 provider 都失败
         except Exception as e:
-            print(f"[ERROR] {provider_name} 未知异常: {e}")
+            logger.error("%s 未知异常: %s", provider_name, e)
             last_error = e
             if idx < len(fallback_order) - 1:
                 continue
             break
 
     if report_text is None:
-        print("[ERROR] 所有 provider 均失败，无法生成周报")
+        logger.error("所有 provider 均失败，无法生成周报")
         error_msg = str(last_error or "未知错误")
-        print(f"[ERROR] 最后一次错误: {error_msg}")
+        logger.error("最后一次错误: %s", error_msg)
         # 自动发送失败告警
         send_failure_alert(config, f"AI 接口调用失败: {error_msg}")
         if debug:
-            traceback.print_exc()
+            logger.debug("LLM 调用异常堆栈:", exc_info=True)
         return None, ErrorCode.LLM_ERROR
 
     return report_text, None
@@ -303,13 +303,13 @@ def generate_report_via_llm(
 def save_report_to_file(report_text: str, config: dict) -> Path:
     """保存周报到文件并打印，返回输出路径"""
     out_path = resolve_output_path(config)
-    print("\n" + "=" * 60)
-    print("生成的周报内容：")
-    print("=" * 60)
-    print(report_text)
+    logger.info("=" * 60)
+    logger.info("生成的周报内容：")
+    logger.info("=" * 60)
+    logger.info(report_text)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(report_text, encoding="utf-8")
-    print(f"\n[INFO] 周报已保存至: {out_path.absolute()}")
+    logger.info("周报已保存至: %s", out_path.absolute())
     return out_path
 
 
@@ -332,17 +332,17 @@ def handle_dingtalk_review(
         try:
             decision, reason = wait_for_confirmation(report_text, out_path.name, config)
         except ValueError as e:
-            print(f"[ERROR] 钉钉配置错误: {e}")
+            logger.error("钉钉配置错误: %s", e)
             return False, ErrorCode.DINGTALK_ERROR
         except RuntimeError as e:
-            print(f"[ERROR] 钉钉审核流程异常: {e}")
+            logger.error("钉钉审核流程异常: %s", e)
             send_failure_alert(config, f"钉钉审核流程异常: {e}")
             if args.debug:
-                traceback.print_exc()
+                logger.debug("钉钉审核流程异常堆栈:", exc_info=True)
             return False, ErrorCode.DINGTALK_ERROR
-        print(f"[INFO] 钉钉审核结果: {decision}（{reason}）")
+        logger.info("钉钉审核结果: %s（%s）", decision, reason)
         if decision != "confirm":
-            print("[INFO] 未获得审核确认，跳过钉钉推送与邮件发送。")
+            logger.info("未获得审核确认，跳过钉钉推送与邮件发送。")
             return False, None  # 非错误，只是跳过后续
 
     # 发送钉钉周报（审核通过后推送给钉钉接收人）
@@ -350,13 +350,13 @@ def handle_dingtalk_review(
         try:
             send_dingtalk_report(report_text, out_path.name, config)
         except ValueError as e:
-            print(f"[ERROR] 钉钉配置错误: {e}")
+            logger.error("钉钉配置错误: %s", e)
             return False, ErrorCode.DINGTALK_ERROR
         except RuntimeError as e:
-            print(f"[ERROR] 钉钉周报发送失败: {e}")
+            logger.error("钉钉周报发送失败: %s", e)
             send_failure_alert(config, f"钉钉周报发送失败: {e}")
             if args.debug:
-                traceback.print_exc()
+                logger.debug("钉钉周报发送异常堆栈:", exc_info=True)
             return False, ErrorCode.DINGTALK_ERROR
 
     return True, None
@@ -375,7 +375,7 @@ def send_email_if_enabled(
         错误码或 None（成功时返回 None）
     """
     if args.no_email:
-        print("[INFO] 已跳过邮件发送（--no-email）")
+        logger.info("已跳过邮件发送（--no-email）")
         return None
     if not config.get("email", {}).get("enabled"):
         return None
@@ -384,13 +384,13 @@ def send_email_if_enabled(
         send_report_email(report_text, out_path, config, downloaded_excel_path)
         return None
     except ValueError as e:
-        print(f"[ERROR] 邮件配置错误: {e}")
+        logger.error("邮件配置错误: %s", e)
         return ErrorCode.EMAIL_ERROR
     except RuntimeError as e:
-        print(f"[ERROR] 邮件发送失败: {e}")
+        logger.error("邮件发送失败: %s", e)
         send_failure_alert(config, f"邮件发送失败: {e}")
         if args.debug:
-            traceback.print_exc()
+            logger.debug("邮件发送异常堆栈:", exc_info=True)
         return ErrorCode.EMAIL_ERROR
 
 
@@ -427,19 +427,19 @@ def _run(args: argparse.Namespace) -> int:
     try:
         excel_text = aggregate_excel_content(config, downloaded_excel_path)
     except FileNotFoundError as e:
-        print(f"[ERROR] {e}")
+        logger.error("%s", e)
         return ErrorCode.CRM_ERROR
 
     if args.dry_run:
-        print("\n" + "=" * 60)
-        print("Excel 汇总内容预览：")
-        print("=" * 60)
-        print(excel_text)
+        logger.info("=" * 60)
+        logger.info("Excel 汇总内容预览：")
+        logger.info("=" * 60)
+        logger.info(excel_text)
         return ErrorCode.SUCCESS
 
     # 6. 构建 Prompt 并调用 LLM
     prompt = build_prompt(excel_text, config)
-    print(f"[INFO] Prompt 总字符数: {len(prompt)}")
+    logger.info("Prompt 总字符数: %d", len(prompt))
     report_text, error = generate_report_via_llm(prompt, config, args.debug)
     if error:
         return error
@@ -459,7 +459,7 @@ def _run(args: argparse.Namespace) -> int:
     if error:
         return error
 
-    print(f"[INFO] 全流程执行结束，运行日志: {log_path}")
+    logger.info("全流程执行结束，运行日志: %s", log_path)
     return ErrorCode.SUCCESS
 
 
