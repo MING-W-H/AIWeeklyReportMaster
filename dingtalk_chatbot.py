@@ -37,6 +37,9 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
 from config_manager import load_config
 from dingtalk_confirmer import _get_credentials
 from llm_client import call_llm_chat
+from logger import get_logger
+
+logger = get_logger(__name__)
 
 try:
     import dingtalk_stream
@@ -129,7 +132,8 @@ if DINGTALK_STREAM_AVAILABLE:
             conv_id = (getattr(msg, "conversation_id", "") or "").strip()
             conv_title = getattr(msg, "conversation_title", "") or ""
 
-            print(f"[INFO] 收到消息: {sender_nick} ({'群聊: ' + conv_title if is_group else '单聊'})")
+            logger.info("收到消息: %s (%s)", sender_nick,
+                        f"群聊: {conv_title}" if is_group else "单聊")
 
             # 权限白名单：未授权用户拒绝服务
             if self.allow_user_ids and sender_id not in self.allow_user_ids:
@@ -201,7 +205,7 @@ if DINGTALK_STREAM_AVAILABLE:
                 else reply[: self.max_reply_chars] + "\n\n...(内容过长已截断)"
             )
             self.reply_markdown(_REPLY_TITLE, display, msg)
-            print(f"[INFO] 已回复 {sender_nick}（{len(reply)} 字符）")
+            logger.info("已回复 %s（%d 字符）", sender_nick, len(reply))
             return AckMessage.STATUS_OK, "OK"
 
 else:
@@ -210,40 +214,41 @@ else:
 
 def run_chatbot(config: Dict[str, Any], debug: bool = False) -> int:
     """启动钉钉 AI 问答机器人（常驻运行，Ctrl+C 退出）。"""
-    logging.basicConfig(
-        level=logging.DEBUG if debug else logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-    )
+    # 复用 logger 模块的兜底控制台 handler，并按 --debug 调整级别
+    root = logging.getLogger()
+    if not root.handlers:
+        get_logger()
+    root.setLevel(logging.DEBUG if debug else logging.INFO)
 
     if not DINGTALK_STREAM_AVAILABLE:
-        print("[ERROR] 未安装 dingtalk-stream，请先执行: pip install dingtalk-stream")
+        logger.error("未安装 dingtalk-stream，请先执行: pip install dingtalk-stream")
         return 1
 
     chatbot_cfg = config.get("chatbot", {})
     if not chatbot_cfg.get("enabled"):
-        print("[INFO] 聊天机器人未启用：config.json 中 chatbot.enabled = false，已退出。")
-        print("[INFO] 如需启用，请将 chatbot.enabled 改为 true 后重新运行。")
+        logger.info("聊天机器人未启用：config.json 中 chatbot.enabled = false，已退出。")
+        logger.info("如需启用，请将 chatbot.enabled 改为 true 后重新运行。")
         return 0
 
     dt_cfg = config.get("dingtalk", {})
     try:
         app_key, app_secret = _get_credentials(dt_cfg)
     except ValueError as e:
-        print(f"[ERROR] {e}")
+        logger.error("%s", e)
         return 1
 
     provider_name = config.get("provider", "")
     model = config.get("providers", {}).get(provider_name, {}).get("model", "")
     allow_ids = [s for s in (chatbot_cfg.get("allow_user_ids") or []) if str(s).strip()]
 
-    print("=" * 60)
-    print("AI 周报机器人（大模型问答）")
-    print("=" * 60)
-    print(f"大模型: {provider_name} / {model}")
-    print(f"允许用户: {'全部员工' if not allow_ids else ', '.join(allow_ids)}")
-    print(f"对话上下文: 保留最近 {chatbot_cfg.get('max_history_turns', 10)} 轮")
-    print("运行方式: Stream 长连接，常驻运行，按 Ctrl+C 退出")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("AI 周报机器人（大模型问答）")
+    logger.info("=" * 60)
+    logger.info("大模型: %s / %s", provider_name, model)
+    logger.info("允许用户: %s", "全部员工" if not allow_ids else ", ".join(allow_ids))
+    logger.info("对话上下文: 保留最近 %s 轮", chatbot_cfg.get("max_history_turns", 10))
+    logger.info("运行方式: Stream 长连接，常驻运行，按 Ctrl+C 退出")
+    logger.info("=" * 60)
 
     handler = ChatbotLLMHandler(config)
     credential = dingtalk_stream.Credential(app_key, app_secret)
@@ -255,7 +260,7 @@ def run_chatbot(config: Dict[str, Any], debug: bool = False) -> int:
     try:
         client.start_forever()
     except KeyboardInterrupt:
-        print("\n[INFO] 已退出聊天机器人服务。")
+        logger.info("已退出聊天机器人服务。")
     return 0
 
 

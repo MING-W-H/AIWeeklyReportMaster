@@ -26,7 +26,10 @@ from urllib.parse import quote_plus
 import requests
 import websockets
 
+from logger import get_logger
 from retry_utils import retry_request
+
+logger = get_logger(__name__)
 
 try:
     import dingtalk_stream
@@ -473,9 +476,9 @@ def wait_for_confirmation(report_text: str, report_name: str,
     preview = _build_preview(report_text, report_name, confirm_kws, cancel_kws,
                              timeout_minutes, max_chars)
     _send_markdown_oto(app_key, app_secret, approver_ids, "周报待审核", preview)
-    print(f"[INFO] 钉钉待审核预览已发送给审核人: {', '.join(approver_ids)}")
-    print(f"[INFO] 等待审核人回复（{'/'.join(confirm_kws)} 确认 / {'/'.join(cancel_kws)} 取消），"
-          f"超时 {timeout_minutes:g} 分钟自动放弃...")
+    logger.info("钉钉待审核预览已发送给审核人: %s", ", ".join(approver_ids))
+    logger.info("等待审核人回复（%s 确认 / %s 取消），超时 %g 分钟自动放弃...",
+                "/".join(confirm_kws), "/".join(cancel_kws), timeout_minutes)
 
     # 2. 启动 Stream 长连接等待回复
     decision, sender = asyncio.run(_wait_reply_async(
@@ -496,7 +499,7 @@ def wait_for_confirmation(report_text: str, report_name: str,
             f"本次周报（{report_name}）未发送。\n\n如需发送请重新运行生成流程。",
         )
     except Exception as e:
-        print(f"[WARN] 超时通知发送失败: {e}")
+        logger.warning("超时通知发送失败: %s", e)
     return "timeout", f"超过 {timeout_minutes:g} 分钟未收到回复"
 
 
@@ -515,15 +518,15 @@ def send_dingtalk_report(report_text: str, report_name: str,
     recipient_ids = [s.strip() for s in (dt_cfg.get("recipient_staff_ids") or []) if str(s).strip()]
     conversation_id = str(dt_cfg.get("open_conversation_id") or "").strip()
     if not recipient_ids and not conversation_id:
-        print("[WARN] dingtalk.recipient_staff_ids 与 open_conversation_id 均未配置，跳过钉钉发送")
+        logger.warning("dingtalk.recipient_staff_ids 与 open_conversation_id 均未配置，跳过钉钉发送")
         return
 
     if recipient_ids:
         _send_markdown_oto(app_key, app_secret, recipient_ids, title, text)
-        print(f"[INFO] 钉钉周报已发送（单聊）: {', '.join(recipient_ids)}")
+        logger.info("钉钉周报已发送（单聊）: %s", ", ".join(recipient_ids))
     if conversation_id:
         _send_markdown_group(app_key, app_secret, conversation_id, title, text)
-        print(f"[INFO] 钉钉周报已发送（群聊）: {conversation_id}")
+        logger.info("钉钉周报已发送（群聊）: %s", conversation_id)
 
 
 def send_failure_alert(config: Dict[str, Any], error_summary: str) -> None:
@@ -549,11 +552,11 @@ def send_failure_alert(config: Dict[str, Any], error_summary: str) -> None:
         title, text = render_notification(config, "failure_alert", error_summary=error_summary)
     except KeyError as e:
         # 模板缺失时使用硬编码兜底
-        print(f"[WARN] {e}，使用默认告警格式")
+        logger.warning("%s，使用默认告警格式", e)
         title = "周报生成失败"
         text = f"## 周报生成失败\n\n本周周报自动生成流程出现异常，详情如下：\n\n{error_summary}\n\n请检查日志或联系系统管理员处理。"
     try:
         _send_markdown_oto(app_key, app_secret, approver_ids, title, text)
-        print(f"[INFO] 失败告警已发送给审核人: {', '.join(approver_ids)}")
+        logger.info("失败告警已发送给审核人: %s", ", ".join(approver_ids))
     except Exception as e:
-        print(f"[WARN] 失败告警发送失败: {e}")
+        logger.warning("失败告警发送失败: %s", e)

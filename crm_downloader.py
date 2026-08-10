@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """CRM 工时 Excel 下载模块。
 
 负责：
@@ -18,7 +18,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
+from logger import get_logger
 from retry_utils import retry_request
+
+logger = get_logger(__name__)
 
 
 # ============ 日期范围计算 ============
@@ -124,7 +127,7 @@ def refresh_crm_token(config: Dict[str, Any]) -> str:
     }
 
     timeout = int(crm_cfg.get("timeout", 60))
-    print(f"[INFO] CRM token 已失效，正在调用登录接口刷新: {login_url}")
+    logger.info("CRM token 已失效，正在调用登录接口刷新: %s", login_url)
 
     try:
         response = retry_request(
@@ -181,7 +184,7 @@ def refresh_crm_token(config: Dict[str, Any]) -> str:
 
     # 写回 config.json 持久化新 token
     _persist_token_to_config(config, new_token)
-    print("[INFO] CRM token 刷新成功，已写回 config.json")
+    logger.info("CRM token 刷新成功，已写回 config.json")
     return new_token
 
 
@@ -197,7 +200,7 @@ def _persist_token_to_config(config: Dict[str, Any], new_token: str) -> None:
     # 找到 config.json 文件路径
     config_path = Path(__file__).parent / "config.json"
     if not config_path.exists():
-        print(f"[WARN] config.json 不存在于 {config_path}，token 仅更新到内存，未持久化")
+        logger.warning("config.json 不存在于 %s，token 仅更新到内存，未持久化", config_path)
         return
 
     try:
@@ -207,7 +210,7 @@ def _persist_token_to_config(config: Dict[str, Any], new_token: str) -> None:
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump(file_config, f, ensure_ascii=False, indent=2)
     except (OSError, json.JSONDecodeError) as e:
-        print(f"[WARN] 写回 config.json 失败: {e}，token 仅更新到内存")
+        logger.warning("写回 config.json 失败: %s，token 仅更新到内存", e)
 
 
 # ============ 旧文件清理 ============
@@ -248,7 +251,7 @@ def cleanup_download_dir(
             item.unlink()
             removed += 1
         except OSError as e:
-            print(f"  [WARN] 删除旧文件失败 {item.name}: {e}")
+            logger.warning("删除旧文件失败 %s: %s", item.name, e)
     return removed
 
 
@@ -413,7 +416,7 @@ def _send_crm_request_with_retry(
 
         # 401 鉴权失败：尝试刷新 token 后重试一次
         if response.status_code == 401 and attempt == 0:
-            print("[WARN] CRM 鉴权失败 (HTTP 401)，token 已失效，尝试自动刷新...")
+            logger.warning("CRM 鉴权失败 (HTTP 401)，token 已失效，尝试自动刷新...")
             try:
                 token = refresh_crm_token(config)
             except (ValueError, RuntimeError) as e:
@@ -421,7 +424,7 @@ def _send_crm_request_with_retry(
                     f"CRM token 自动刷新失败: {e}\n"
                     "请手动更新 config.json 中 crm.token 后重试。"
                 )
-            print("[INFO] 使用新 token 重试 CRM 接口请求...")
+            logger.info("使用新 token 重试 CRM 接口请求...")
             continue
         break  # 非 401 或已重试过，跳出循环
 
@@ -502,8 +505,8 @@ def _extract_excel_from_response(
     if any(kw in content_type for kw in excel_mime_keywords):
         save_path = download_dir / filename
         save_path.write_bytes(response.content)
-        print(f"[INFO] Excel 下载成功 (二进制流): {save_path.name}")
-        print(f"[INFO] 文件大小: {len(response.content) / 1024:.1f} KB")
+        logger.info("Excel 下载成功 (二进制流): %s", save_path.name)
+        logger.info("文件大小: %.1f KB", len(response.content) / 1024)
         return save_path
 
     # 情况 2：返回 JSON
@@ -553,8 +556,8 @@ def _extract_excel_from_response(
             )
         save_path = download_dir / filename
         save_path.write_bytes(file_bytes)
-        print(f"[INFO] Excel 下载成功 (JSON base64): {save_path.name}")
-        print(f"[INFO] 文件大小: {len(file_bytes) / 1024:.1f} KB")
+        logger.info("Excel 下载成功 (JSON base64): %s", save_path.name)
+        logger.info("文件大小: %.1f KB", len(file_bytes) / 1024)
         return save_path
 
     # JSON 响应但未识别到 Excel 数据
@@ -592,13 +595,14 @@ def download_workhour_excel(
     # 2. 日期计算（统一计算一次，后续日志与命名共用，避免不一致）
     start_stamp, finish_stamp = _calc_date_range(start_date, finish_date)
     range_label = _build_range_label(start_date, finish_date)
-    print(f"[INFO] CRM 工时下载日期范围: {start_stamp} ~ {finish_stamp} (文件命名标签: {range_label})")
+    logger.info("CRM 工时下载日期范围: %s ~ %s (文件命名标签: %s)",
+                start_stamp, finish_stamp, range_label)
 
     # 3. 请求构建
     token = _resolve_crm_token(crm_cfg)
     body = _build_crm_body(crm_cfg, start_stamp, finish_stamp)
     url = crm_cfg.get("url", "").strip()
-    print(f"[INFO] 调用 CRM 接口下载工时 Excel: {url}")
+    logger.info("调用 CRM 接口下载工时 Excel: %s", url)
 
     # 4. 网络请求（含鉴权重试）
     response = _send_crm_request_with_retry(url, crm_cfg, body, token, config)
@@ -611,7 +615,7 @@ def download_workhour_excel(
     extensions = config.get("excel_extensions", [".xlsx", ".xls", ".xlsm"])
     removed = cleanup_download_dir(download_dir, extensions, range_label, export_prefix)
     if removed:
-        print(f"[INFO] 已清理 {removed} 个日期范围重复的旧 Excel 文件（保留其他周历史文件）")
+        logger.info("已清理 %d 个日期范围重复的旧 Excel 文件（保留其他周历史文件）", removed)
 
     # 7. 响应解析与文件保存
     return _extract_excel_from_response(

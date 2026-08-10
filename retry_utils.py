@@ -9,6 +9,10 @@ from typing import Callable, Any, Tuple, Optional
 
 import requests
 
+from logger import get_logger
+
+logger = get_logger(__name__)
+
 
 def retry_request(
     func: Callable[..., requests.Response],
@@ -43,8 +47,8 @@ def retry_request(
                 if attempt == max_retries:
                     return resp
                 delay = base_delay * (backoff ** attempt) + random.uniform(0, 0.5)
-                print(f"[WARN] {func_name} HTTP {resp.status_code}，{delay:.1f}秒后重试 "
-                      f"(第{attempt+1}次/{max_retries})...")
+                logger.warning("%s HTTP %s，%.1f秒后重试 (第%d次/%d)...",
+                               func_name, resp.status_code, delay, attempt + 1, max_retries)
                 time.sleep(delay)
                 continue
             return resp
@@ -53,8 +57,8 @@ def retry_request(
             if attempt == max_retries:
                 raise
             delay = base_delay * (backoff ** attempt) + random.uniform(0, 0.5)
-            print(f"[WARN] {func_name} 网络异常: {e}，{delay:.1f}秒后重试 "
-                  f"(第{attempt+1}次/{max_retries})...")
+            logger.warning("%s 网络异常: %s，%.1f秒后重试 (第%d次/%d)...",
+                           func_name, e, delay, attempt + 1, max_retries)
             time.sleep(delay)
             continue
         except requests.exceptions.RequestException as e:
@@ -62,8 +66,8 @@ def retry_request(
             if attempt == max_retries:
                 raise
             delay = base_delay * (backoff ** attempt) + random.uniform(0, 0.5)
-            print(f"[WARN] {func_name} 请求异常: {e}，{delay:.1f}秒后重试 "
-                  f"(第{attempt+1}次/{max_retries})...")
+            logger.warning("%s 请求异常: %s，%.1f秒后重试 (第%d次/%d)...",
+                           func_name, e, delay, attempt + 1, max_retries)
             time.sleep(delay)
             continue
 
