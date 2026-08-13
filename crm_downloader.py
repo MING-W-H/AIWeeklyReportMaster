@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """CRM 工时 Excel 下载模块。
 
 负责：
@@ -7,7 +7,7 @@
 - 支持手动指定日期范围（CLI 参数 --crm-start / --crm-finish）
 - 下载前清理下载目录中的旧 Excel 文件，避免跨周混用
 - 兼容二进制 Excel 响应与 JSON 响应（base64 / 错误信息）
-- JWT token 失效时自动调用登录接口刷新 token 并写回 config.json
+- JWT token 失效时自动调用登录接口刷新 token 并写回 config.json（落盘加密存储）
 """
 import os
 import json
@@ -22,6 +22,110 @@ from logger import get_logger
 from retry_utils import retry_request
 
 logger = get_logger(__name__)
+
+
+# ============ 敏感信息加密（CRM token 落盘加密） ============
+# 优先使用 Windows DPAPI（CryptProtectData），与当前 Windows 用户绑定，无需额外依赖；
+# 非 Windows 平台回退到基于机器特征码的 XOR 混淆（强度有限，仅防止明文落盘）。
+_TOKEN_PREFIX = "enc:v1:"
+
+
+def _dpapi_protect(data: bytes) -> bytes:
+    """使用 Windows DPAPI 加密数据（仅 Windows 可用）。"""
+    import ctypes
+    from ctypes import wintypes
+
+    class DATA_BLOB(ctypes.Structure):
+        _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
+
+    buf = ctypes.create_string_buffer(data, len(data))
+    data_in = DATA_BLOB(len(data), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char)))
+    data_out = DATA_BLOB()
+    if not ctypes.windll.crypt32.CryptProtectData(
+        ctypes.byref(data_in), None, None, None, None, 0, ctypes.byref(data_out)
+    ):
+        raise OSError("Windows DPAPI 加密失败 (CryptProtectData)")
+    try:
+        return ctypes.string_at(data_out.pbData, data_out.cbData)
+    finally:
+        ctypes.windll.kernel32.LocalFree(data_out.pbData)
+
+
+def _dpapi_unprotect(data: bytes) -> bytes:
+    """使用 Windows DPAPI 解密数据（仅 Windows 可用）。"""
+    import ctypes
+    from ctypes import wintypes
+
+    class DATA_BLOB(ctypes.Structure):
+        _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
+
+    buf = ctypes.create_string_buffer(data, len(data))
+    data_in = DATA_BLOB(len(data), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char)))
+    data_out = DATA_BLOB()
+    if not ctypes.windll.crypt32.CryptUnprotectData(
+        ctypes.byref(data_in), None, None, None, None, 0, ctypes.byref(data_out)
+    ):
+        raise OSError("Windows DPAPI 解密失败 (CryptUnprotectData)")
+    try:
+        return ctypes.string_at(data_out.pbData, data_out.cbData)
+    finally:
+        ctypes.windll.kernel32.LocalFree(data_out.pbData)
+
+
+def _machine_key() -> bytes:
+    """生成机器相关的混淆密钥（非 Windows 回退方案用）。"""
+    import hashlib
+    import platform
+
+    raw = (platform.node() + "\x00" + os.path.expanduser("~")).encode("utf-8", "ignore")
+    return hashlib.sha256(raw).digest()
+
+
+def _xor_bytes(data: bytes, key: bytes) -> bytes:
+    return bytes(b ^ key[i % len(key)] for i, b in enumerate(data))
+
+
+def encrypt_secret(plaintext: str) -> str:
+    """加密敏感字符串，返回带前缀的密文（便于识别与兼容旧明文）。"""
+    raw = plaintext.encode("utf-8")
+    if os.name == "nt":
+        cipher = _dpapi_protect(raw)
+    else:
+        cipher = _xor_bytes(raw, _machine_key())
+    return _TOKEN_PREFIX + base64.b64encode(cipher).decode("ascii")
+
+
+def decrypt_secret(stored: str) -> str:
+    """解密敏感字符串；旧版明文（无前缀）直接原样返回。
+
+    Raises:
+        ValueError: 密文格式非法或解密失败（如 config.json 被复制到其它机器）。
+    """
+    stored = (stored or "").strip()
+    if not stored:
+        return ""
+    if not stored.startswith(_TOKEN_PREFIX):
+        return stored  # 兼容旧版明文 token
+    try:
+        payload = base64.b64decode(stored[len(_TOKEN_PREFIX):])
+    except Exception:
+        raise ValueError(
+            "CRM token 密文格式非法，请重新设置 crm.token 或环境变量 CRM_TOKEN"
+        )
+    try:
+        if os.name == "nt":
+            raw = _dpapi_unprotect(payload)
+        else:
+            raw = _xor_bytes(payload, _machine_key())
+    except Exception:
+        raise ValueError(
+            "CRM token 解密失败（DPAPI 无法跨机器解密，config.json 可能被复制到其它机器）。"
+            "请重新设置 crm.token 或环境变量 CRM_TOKEN"
+        )
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise ValueError("CRM token 解密结果不是合法文本，请重新设置 crm.token")
 
 
 # ============ 日期范围计算 ============
@@ -195,6 +299,7 @@ def _persist_token_to_config(config: Dict[str, Any], new_token: str) -> None:
         config: 全局配置字典（会原地更新 config["crm"]["token"]）
         new_token: 新获取的 token 字符串
     """
+    # 内存中保持明文，供本次运行直接使用
     config.setdefault("crm", {})["token"] = new_token
 
     # 找到 config.json 文件路径
@@ -206,7 +311,8 @@ def _persist_token_to_config(config: Dict[str, Any], new_token: str) -> None:
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             file_config = json.load(f)
-        file_config.setdefault("crm", {})["token"] = new_token
+        # 落盘前加密，避免 token 明文写入 config.json
+        file_config.setdefault("crm", {})["token"] = encrypt_secret(new_token)
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump(file_config, f, ensure_ascii=False, indent=2)
     except (OSError, json.JSONDecodeError) as e:
@@ -280,7 +386,7 @@ def _validate_crm_config(config: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _resolve_crm_token(crm_cfg: Dict[str, Any]) -> str:
-    """从配置或环境变量解析 CRM token。"""
+    """从配置或环境变量解析 CRM token（config.json 中的密文在此解密）。"""
     token = crm_cfg.get("token", "").strip()
     if not token:
         token = os.getenv("CRM_TOKEN", "").strip()
@@ -290,7 +396,7 @@ def _resolve_crm_token(crm_cfg: Dict[str, Any]) -> str:
             "请在 config.json 中填入 authorization Bearer 后面的 token 值，"
             "或设置环境变量 CRM_TOKEN"
         )
-    return token
+    return decrypt_secret(token)
 
 
 def _calc_date_range(

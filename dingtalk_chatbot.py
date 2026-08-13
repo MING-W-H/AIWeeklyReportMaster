@@ -35,7 +35,7 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
         pass
 
 from config_manager import load_config
-from dingtalk_confirmer import _get_credentials
+from dingtalk_confirmer import get_credentials
 from llm_client import call_llm_chat
 from logger import get_logger
 
@@ -100,6 +100,18 @@ if DINGTALK_STREAM_AVAILABLE:
             # 会话历史：会话标识 -> [{role, content}, ...]（role: user/assistant）
             self.histories: Dict[str, List[Dict[str, str]]] = {}
             self._lock = threading.Lock()
+            # 会话级锁：同一会话的消息串行处理，避免并发下互相覆盖历史
+            self._session_locks: Dict[str, threading.Lock] = {}
+            self._locks_guard = threading.Lock()
+
+        def _get_session_lock(self, key: str) -> threading.Lock:
+            """返回指定会话的专用锁（懒创建，避免全局锁串行化所有会话）。"""
+            with self._locks_guard:
+                lock = self._session_locks.get(key)
+                if lock is None:
+                    lock = threading.Lock()
+                    self._session_locks[key] = lock
+                return lock
 
         def _trim_history(self, history: List[Dict[str, str]]) -> List[Dict[str, str]]:
             """按轮次裁剪历史，仅保留最近 max_history_turns 轮（1 轮 = 1 条 user + 回答）。"""
@@ -162,30 +174,36 @@ if DINGTALK_STREAM_AVAILABLE:
                 )
                 return AckMessage.STATUS_OK, "OK"
 
-            # 追加用户消息并裁剪历史
-            with self._lock:
+            # 追加用户消息并裁剪历史（会话级锁保证同一会话串行处理）
+            session_lock = self._get_session_lock(session_key)
+            reply = ""
+            with session_lock:
                 history = self._trim_history(self.histories.get(session_key, []))
+                history = list(history)
                 history.append({"role": "user", "content": text})
 
-            # 调用大模型回答
-            try:
-                reply = call_llm_chat(history, self.config, system_prompt=self.system_prompt)
-            except (ValueError, RuntimeError) as e:
-                self.reply_markdown(
-                    _REPLY_TITLE,
-                    f"抱歉，AI 服务暂时不可用：{e}\n\n请稍后重试，或联系系统管理员。",
-                    msg,
-                )
-                return AckMessage.STATUS_OK, "OK"
-            except Exception:
-                self.reply_markdown(
-                    _REPLY_TITLE,
-                    "抱歉，处理您的消息时出现异常，请稍后重试。",
-                    msg,
-                )
+                # 调用大模型回答
+                try:
+                    reply = call_llm_chat(history, self.config, system_prompt=self.system_prompt)
+                except (ValueError, RuntimeError) as e:
+                    error_reply = (
+                        f"抱歉，AI 服务暂时不可用：{e}\n\n请稍后重试，或联系系统管理员。"
+                    )
+                except Exception:
+                    error_reply = "抱歉，处理您的消息时出现异常，请稍后重试。"
+                else:
+                    error_reply = None
+                    reply = (reply or "").strip()
+                    if reply:
+                        # 保存模型回答到历史（形成多轮上下文）
+                        self.histories[session_key] = history + [
+                            {"role": "assistant", "content": reply}
+                        ]
+
+            if error_reply is not None:
+                self.reply_markdown(_REPLY_TITLE, error_reply, msg)
                 return AckMessage.STATUS_OK, "OK"
 
-            reply = (reply or "").strip()
             if not reply:
                 self.reply_markdown(
                     _REPLY_TITLE,
@@ -193,10 +211,6 @@ if DINGTALK_STREAM_AVAILABLE:
                     msg,
                 )
                 return AckMessage.STATUS_OK, "OK"
-
-            # 保存模型回答到历史（形成多轮上下文）
-            with self._lock:
-                self.histories[session_key] = history + [{"role": "assistant", "content": reply}]
 
             # 回复（超长截断）
             display = (
@@ -232,7 +246,7 @@ def run_chatbot(config: Dict[str, Any], debug: bool = False) -> int:
 
     dt_cfg = config.get("dingtalk", {})
     try:
-        app_key, app_secret = _get_credentials(dt_cfg)
+        app_key, app_secret = get_credentials(dt_cfg)
     except ValueError as e:
         logger.error("%s", e)
         return 1

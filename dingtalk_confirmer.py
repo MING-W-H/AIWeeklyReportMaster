@@ -52,7 +52,7 @@ DEFAULT_CONFIRM_KEYWORDS = ["发送", "send", "确认", "ok"]
 DEFAULT_CANCEL_KEYWORDS = ["取消", "cancel", "放弃", "不发送"]
 
 
-def _get_credentials(dt_cfg: Dict[str, Any]) -> Tuple[str, str]:
+def get_credentials(dt_cfg: Dict[str, Any]) -> Tuple[str, str]:
     """读取钉钉应用凭证：环境变量 > config.json。"""
     app_key = (os.getenv("DINGTALK_APP_KEY") or dt_cfg.get("app_key", "")).strip()
     app_secret = (os.getenv("DINGTALK_APP_SECRET") or dt_cfg.get("app_secret", "")).strip()
@@ -88,7 +88,7 @@ def _get_access_token(app_key: str, app_secret: str) -> str:
     return token
 
 
-def _get_oapi_access_token(app_key: str, app_secret: str) -> str:
+def get_oapi_access_token(app_key: str, app_secret: str) -> str:
     """获取旧版 oapi access_token（通讯录接口使用该端点）。"""
     try:
         resp = retry_request(
@@ -112,14 +112,19 @@ def _get_oapi_access_token(app_key: str, app_secret: str) -> str:
 def get_userid_by_mobile(config: Dict[str, Any], mobile: str) -> str:
     """按手机号查询成员 userId。需已开通「成员信息读权限」。"""
     dt_cfg = config.get("dingtalk", {})
-    app_key, app_secret = _get_credentials(dt_cfg)
-    token = _get_oapi_access_token(app_key, app_secret)
+    app_key, app_secret = get_credentials(dt_cfg)
+    token = get_oapi_access_token(app_key, app_secret)
     try:
-        resp = requests.post(
+        resp = retry_request(
+            requests.post,
             _GET_USER_BY_MOBILE_URL,
             params={"access_token": token},
             json={"mobile": mobile},
             timeout=15,
+            max_retries=2,
+            base_delay=1.0,
+            backoff=2.0,
+            func_name="钉钉手机号查询",
         )
     except requests.RequestException as e:
         raise RuntimeError(f"钉钉手机号查询网络异常: {e}")
@@ -138,15 +143,20 @@ def get_userid_by_mobile(config: Dict[str, Any], mobile: str) -> str:
 def list_dept_subs(config: Dict[str, Any], dept_id: int = 1) -> List[Dict[str, str]]:
     """列出指定部门下的子部门（id + 名称）。需已开通通讯录读权限。"""
     dt_cfg = config.get("dingtalk", {})
-    app_key, app_secret = _get_credentials(dt_cfg)
-    token = _get_oapi_access_token(app_key, app_secret)
+    app_key, app_secret = get_credentials(dt_cfg)
+    token = get_oapi_access_token(app_key, app_secret)
 
     try:
-        resp = requests.post(
+        resp = retry_request(
+            requests.post,
             _LIST_DEPT_URL,
             params={"access_token": token},
             json={"dept_id": dept_id},
             timeout=15,
+            max_retries=2,
+            base_delay=1.0,
+            backoff=2.0,
+            func_name="钉钉部门列表查询",
         )
     except requests.RequestException as e:
         raise RuntimeError(f"钉钉部门列表查询网络异常: {e}")
@@ -168,18 +178,23 @@ def list_dept_subs(config: Dict[str, Any], dept_id: int = 1) -> List[Dict[str, s
 def list_dept_members(config: Dict[str, Any], dept_id: int = 1) -> List[Dict[str, str]]:
     """列出指定部门下的成员（姓名 + userId）。需已开通通讯录读权限。"""
     dt_cfg = config.get("dingtalk", {})
-    app_key, app_secret = _get_credentials(dt_cfg)
-    token = _get_oapi_access_token(app_key, app_secret)
+    app_key, app_secret = get_credentials(dt_cfg)
+    token = get_oapi_access_token(app_key, app_secret)
 
     members: List[Dict[str, str]] = []
     cursor = 0
     while True:
         try:
-            resp = requests.post(
+            resp = retry_request(
+                requests.post,
                 _LIST_USER_URL,
                 params={"access_token": token},
                 json={"dept_id": dept_id, "cursor": cursor, "size": 100},
                 timeout=15,
+                max_retries=2,
+                base_delay=1.0,
+                backoff=2.0,
+                func_name="钉钉成员列表查询",
             )
         except requests.RequestException as e:
             raise RuntimeError(f"钉钉成员列表查询网络异常: {e}")
@@ -205,8 +220,8 @@ def list_dept_members(config: Dict[str, Any], dept_id: int = 1) -> List[Dict[str
     return members
 
 
-def _send_markdown_oto(app_key: str, app_secret: str, user_ids: List[str],
-                       title: str, text: str) -> None:
+def send_markdown_oto(app_key: str, app_secret: str, user_ids: List[str],
+                      title: str, text: str) -> None:
     """通过机器人批量发送单聊 Markdown 消息。robotCode 即应用 Client ID。"""
     if not user_ids:
         return
@@ -235,9 +250,9 @@ def _send_markdown_oto(app_key: str, app_secret: str, user_ids: List[str],
         raise RuntimeError(f"钉钉单聊消息发送失败: HTTP {resp.status_code} {resp.text}")
 
 
-def _send_markdown_group(app_key: str, app_secret: str, conversation_id: str,
-                         title: str, text: str,
-                         at_user_ids: Optional[List[str]] = None) -> None:
+def send_markdown_group(app_key: str, app_secret: str, conversation_id: str,
+                        title: str, text: str,
+                        at_user_ids: Optional[List[str]] = None) -> None:
     """通过机器人发送群聊 Markdown 消息。
 
     Args:
@@ -352,13 +367,13 @@ if DINGTALK_STREAM_AVAILABLE:
                 cancel_hint = "/".join(self.cancel_kws)
                 self.reply_text(
                     f"未识别的指令。请回复「{confirm_hint}」确认发送，"
-                    f"或「{cancel_hint}」放弃发送。", msg,
+                    f"或回复「{cancel_hint}」放弃发送。", msg,
                 )
             return AckMessage.STATUS_OK, "OK"
 
 
-async def _run_stream_listener(client, done_event: asyncio.Event,
-                               timeout_sec: float) -> None:
+async def run_stream_listener(client, done_event: asyncio.Event,
+                              timeout_sec: float) -> None:
     """自实现的 Stream 监听循环。
 
     与 SDK 自带的 client.start() 不同：该循环支持通过 done_event 优雅退出。
@@ -424,7 +439,7 @@ async def _wait_reply_async(app_key: str, app_secret: str,
     )
 
     listener_task = asyncio.create_task(
-        _run_stream_listener(client, done_event, timeout_sec)
+        run_stream_listener(client, done_event, timeout_sec)
     )
     try:
         try:
@@ -458,7 +473,7 @@ def wait_for_confirmation(report_text: str, report_name: str,
         raise RuntimeError("未安装 dingtalk-stream，请先执行: pip install dingtalk-stream")
 
     dt_cfg = config.get("dingtalk", {})
-    app_key, app_secret = _get_credentials(dt_cfg)
+    app_key, app_secret = get_credentials(dt_cfg)
 
     approver_ids = [s.strip() for s in (dt_cfg.get("approver_staff_ids") or []) if str(s).strip()]
     if not approver_ids:
@@ -475,7 +490,7 @@ def wait_for_confirmation(report_text: str, report_name: str,
     # 1. 推送待审核预览给审核人
     preview = _build_preview(report_text, report_name, confirm_kws, cancel_kws,
                              timeout_minutes, max_chars)
-    _send_markdown_oto(app_key, app_secret, approver_ids, "周报待审核", preview)
+    send_markdown_oto(app_key, app_secret, approver_ids, "周报待审核", preview)
     logger.info("钉钉待审核预览已发送给审核人: %s", ", ".join(approver_ids))
     logger.info("等待审核人回复（%s 确认 / %s 取消），超时 %g 分钟自动放弃...",
                 "/".join(confirm_kws), "/".join(cancel_kws), timeout_minutes)
@@ -493,7 +508,7 @@ def wait_for_confirmation(report_text: str, report_name: str,
 
     # 3. 超时：通知审核人
     try:
-        _send_markdown_oto(
+        send_markdown_oto(
             app_key, app_secret, approver_ids, "周报审核超时",
             f"## 周报审核超时\n\n超过 {timeout_minutes:g} 分钟未收到确认回复，"
             f"本次周报（{report_name}）未发送。\n\n如需发送请重新运行生成流程。",
@@ -510,7 +525,7 @@ def send_dingtalk_report(report_text: str, report_name: str,
     if not dt_cfg.get("enabled"):
         return
 
-    app_key, app_secret = _get_credentials(dt_cfg)
+    app_key, app_secret = get_credentials(dt_cfg)
     max_chars = int(dt_cfg.get("preview_max_chars", 12000))
     title = report_name or "周报"
     text = f"## {title}\n\n" + _truncate(report_text, max_chars)
@@ -522,10 +537,10 @@ def send_dingtalk_report(report_text: str, report_name: str,
         return
 
     if recipient_ids:
-        _send_markdown_oto(app_key, app_secret, recipient_ids, title, text)
+        send_markdown_oto(app_key, app_secret, recipient_ids, title, text)
         logger.info("钉钉周报已发送（单聊）: %s", ", ".join(recipient_ids))
     if conversation_id:
-        _send_markdown_group(app_key, app_secret, conversation_id, title, text)
+        send_markdown_group(app_key, app_secret, conversation_id, title, text)
         logger.info("钉钉周报已发送（群聊）: %s", conversation_id)
 
 
@@ -543,7 +558,7 @@ def send_failure_alert(config: Dict[str, Any], error_summary: str) -> None:
     if not approver_ids:
         return
     try:
-        app_key, app_secret = _get_credentials(dt_cfg)
+        app_key, app_secret = get_credentials(dt_cfg)
     except ValueError:
         return
     # 从配置模板渲染告警文本
@@ -556,7 +571,7 @@ def send_failure_alert(config: Dict[str, Any], error_summary: str) -> None:
         title = "周报生成失败"
         text = f"## 周报生成失败\n\n本周周报自动生成流程出现异常，详情如下：\n\n{error_summary}\n\n请检查日志或联系系统管理员处理。"
     try:
-        _send_markdown_oto(app_key, app_secret, approver_ids, title, text)
+        send_markdown_oto(app_key, app_secret, approver_ids, title, text)
         logger.info("失败告警已发送给审核人: %s", ", ".join(approver_ids))
     except Exception as e:
         logger.warning("失败告警发送失败: %s", e)

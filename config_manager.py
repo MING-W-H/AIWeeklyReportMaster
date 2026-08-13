@@ -6,6 +6,7 @@
 - 定义 DEFAULT_CONFIG（首次运行写入 config.json 的默认配置）
 - 加载 config.json 并合并默认值、环境变量
 """
+import copy
 import difflib
 import json
 import os
@@ -64,6 +65,7 @@ PROVIDER_PRESETS: Dict[str, Dict[str, Any]] = {
 # ============ 默认配置（首次运行会写入 config.json） ============
 DEFAULT_CONFIG: Dict[str, Any] = {
     "provider": "minimax",                           # 当前使用的 provider: minimax | deepseek | opencode | qwen
+    "fallback_providers": [],                        # 备用 provider 列表，主 provider 失败时依次降级（如 ["deepseek", "qwen"]）
     "providers": PROVIDER_PRESETS,                   # 多 provider 配置（可自由修改 base_url/model）
     "excel_folder": "./excel_files",                 # Excel 文件所在文件夹（绝对路径或相对路径）
     "excel_extensions": [".xlsx", ".xls", ".xlsm"],  # 支持的 Excel 扩展名
@@ -80,7 +82,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "crm": {                                         # CRM 工时接口配置（启用后自动从接口下载 Excel，无需手动放置）
         "enabled": False,                            # 是否启用 CRM 接口下载（启用后忽略 excel_folder 手动放置的文件）
         "url": "https://crm.example.com/ipd/rest/v1/workHourReport/integration/exportWorkHourItems",
-        "token": "",                                 # authorization 头中 Bearer: 后的 JWT token（失效时自动用 login_url 刷新）
+        "token": "",                                 # authorization 头中 Bearer: 后的 JWT token（失效时自动刷新并加密落盘）
         "userid": "",                                # 请求头 userid 字段（CRM 用户 ID）
         "tyinjectparams": "",                        # 请求头 tyinjectparams 字段（可选，CRM 注入参数）
         "org_oid_list": [],                          # 组织 OID 列表
@@ -104,6 +106,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "cc": [],                                    # 抄送列表（可选）
         "subject_template": "Vue 周报 {last_week_range}",  # 邮件主题模板
         "attach_report": True,                       # 是否将周报文件作为附件发送
+        "max_chars": 30000,                          # 邮件正文最大字符数（超出截断并告警）
     },
     "contact_info": {                                # 个人联系方式（用于通知消息）
         "email": "your_email@example.com",            # 邮箱
@@ -182,7 +185,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "send_weekday": 4,                           # 每周几发送：0=周一 ... 6=周日（默认 4=周五）
         "skip_holiday": True,                        # 法定节假日/周末自动跳过（复用 holiday_checker）
         "conversation_id": "",                       # 目标钉钉群 openConversationId（留空回退 dingtalk.open_conversation_id）
-        "remind_user_ids": [""],                       # 需要 @ 的成员 userId 列表（运行 dingtalk_userid.py --dept 获取）
+        "remind_user_ids": [],                        # 需要 @ 的成员 userId 列表（运行 dingtalk_userid.py --dept 获取）
     },
     "chatbot": {                                     # 钉钉 AI 问答机器人配置（dingtalk_chatbot.py 用，大模型回答用户问题）
         "enabled": False,                            # 是否启用 AI 问答机器人
@@ -225,7 +228,7 @@ def _merge_config_section(config: Dict[str, Any], section_name: str) -> None:
 def _merge_providers_config(config: Dict[str, Any]) -> None:
     """合并 providers 配置：确保四个 provider 都存在且字段完整。"""
     for prov_name, preset in PROVIDER_PRESETS.items():
-        config["providers"].setdefault(prov_name, preset)
+        config["providers"].setdefault(prov_name, copy.deepcopy(preset))
         # 补齐新增字段（如 thinking_param / max_tokens_field）
         for k, v in preset.items():
             config["providers"][prov_name].setdefault(k, v)
@@ -286,6 +289,7 @@ _CONFIG_SCHEMA: Dict[str, Any] = {
     "allow_extra": False,
     "fields": {
         "provider": {"type": str, "choices": ["minimax", "deepseek", "opencode", "qwen"]},
+        "fallback_providers": {"type": list, "item_type": {"type": str}},
         "providers": {
             "type": dict,
             "allow_extra": True,   # 允许自定义 provider（key 任意）
@@ -347,6 +351,7 @@ _CONFIG_SCHEMA: Dict[str, Any] = {
                 "cc": {"type": list, "item_type": {"type": str}},
                 "subject_template": {"type": str},
                 "attach_report": {"type": bool},
+                "max_chars": {"type": int},
             },
         },
         "contact_info": {
@@ -516,6 +521,65 @@ def validate_config(config: Dict[str, Any]) -> List[str]:
     return errors
 
 
+def validate_required_config(config: Dict[str, Any]) -> List[str]:
+    """校验「已启用功能」的关键配置是否齐全，返回缺失项列表（空列表 = 通过）。
+
+    与 validate_config（字段类型/拼写校验）互补：本函数关注关键凭证是否缺失，
+    仅在功能启用时才校验对应配置，避免误报未启用的模块。
+    """
+    errors: List[str] = []
+
+    # 1. AI provider：至少一个 provider 配置了 api_key（否则无法生成周报）
+    providers = config.get("providers", {})
+    configured = [p for p, cfg in providers.items() if cfg.get("api_key", "").strip()]
+    if not configured:
+        errors.append(
+            "未配置任何 AI provider 的 api_key。"
+            "请在 config.json 的 providers.{minimax|deepseek|opencode|qwen}.api_key 中填写，"
+            "或设置环境变量（MINIMAX_API_KEY / DEEPSEEK_API_KEY / OPENCODE_API_KEY / QWEN_API_KEY）"
+        )
+
+    # 2. CRM：启用时需能拿到 token（直接配置/环境变量，或具备自动登录刷新能力）
+    crm = config.get("crm", {})
+    if crm.get("enabled"):
+        if not crm.get("url", "").strip():
+            errors.append("crm.enabled=true 但 crm.url 未设置")
+        token = crm.get("token", "").strip() or os.getenv("CRM_TOKEN", "").strip()
+        if not token:
+            login_ready = (
+                crm.get("login_url", "").strip()
+                and (os.getenv("CRM_USERNAME", "").strip() or crm.get("username", "").strip())
+                and (os.getenv("CRM_PASSWORD", "").strip() or crm.get("password", "").strip())
+            )
+            if not login_ready:
+                errors.append(
+                    "crm.enabled=true 但缺少可用凭证：既无 crm.token/CRM_TOKEN，"
+                    "也无完整自动登录配置（crm.login_url + crm.username + crm.password）"
+                )
+
+    # 3. 邮件：启用时需配置发件人 / 密码 / 收件人
+    email = config.get("email", {})
+    if email.get("enabled"):
+        sender = os.getenv("EMAIL_SENDER", "").strip() or email.get("sender", "").strip()
+        password = os.getenv("EMAIL_PASSWORD", "").strip() or email.get("password", "").strip()
+        if not sender:
+            errors.append("email.enabled=true 但未配置发件人（email.sender 或环境变量 EMAIL_SENDER）")
+        if not password:
+            errors.append("email.enabled=true 但未配置邮箱密码（email.password 或环境变量 EMAIL_PASSWORD）")
+        if not email.get("recipients"):
+            errors.append("email.enabled=true 但 email.recipients 为空，请至少填入一个收件人")
+
+    # 4. 钉钉：启用时需配置 app_key / app_secret
+    dingtalk = config.get("dingtalk", {})
+    if dingtalk.get("enabled"):
+        if not dingtalk.get("app_key", "").strip():
+            errors.append("dingtalk.enabled=true 但未配置 app_key（或环境变量 DINGTALK_APP_KEY）")
+        if not dingtalk.get("app_secret", "").strip():
+            errors.append("dingtalk.enabled=true 但未配置 app_secret（或环境变量 DINGTALK_APP_SECRET）")
+
+    return errors
+
+
 def load_config() -> Dict[str, Any]:
     """加载配置：环境变量 > config.json > 默认值。"""
     if not CONFIG_PATH.exists():
@@ -532,7 +596,8 @@ def load_config() -> Dict[str, Any]:
 
     # 合并顶层默认值（兼容旧 config 缺字段的情况）
     for k, v in DEFAULT_CONFIG.items():
-        config.setdefault(k, v)
+        if k not in config:
+            config[k] = copy.deepcopy(v)
 
     # 合并嵌套配置段默认值（兼容旧版配置升级）
     _merge_providers_config(config)

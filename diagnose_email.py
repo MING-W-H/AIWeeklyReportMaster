@@ -79,11 +79,11 @@ def main():
     # 5. 测试 SMTP 连接 + 登录
     logger.info("")
     logger.info("-" * 60)
-    logger.info("测试 1: 使用 SSL 端口 465 连接")
+    logger.info("测试 1: 使用 SSL 端口 %s 连接", smtp_port)
     logger.info("-" * 60)
     try:
-        logger.info("[..] 正在连接 %s:465 ...", smtp_host)
-        server = smtplib.SMTP_SSL(smtp_host, 465, timeout=15)
+        logger.info("[..] 正在连接 %s:%s ...", smtp_host, smtp_port)
+        server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=15)
         logger.info("[OK] SSL 连接成功，服务器响应: %s", server.noop()[1])
 
         logger.info("[..] 正在登录 (login)...")
@@ -119,11 +119,11 @@ def main():
     # 6. 如果 465 失败，尝试 587 STARTTLS
     logger.info("")
     logger.info("-" * 60)
-    logger.info("测试 2: 使用 STARTTLS 端口 587 连接")
+    logger.info("测试 2: 使用 STARTTLS 端口 %s 连接", smtp_port)
     logger.info("-" * 60)
     try:
-        logger.info("[..] 正在连接 %s:587 ...", smtp_host)
-        server = smtplib.SMTP(smtp_host, 587, timeout=15)
+        logger.info("[..] 正在连接 %s:%s ...", smtp_host, smtp_port)
+        server = smtplib.SMTP(smtp_host, smtp_port, timeout=15)
         server.ehlo()
         logger.info("[..] 启动 TLS...")
         server.starttls()
@@ -134,7 +134,7 @@ def main():
         server.login(sender, password)
         logger.info("[OK] 登录成功！鉴权通过！")
         server.quit()
-        logger.info("[提示] 465 失败但 587 成功，请将 config.json 中 smtp_port 改为 587")
+        logger.info("[提示] SSL 失败但 STARTTLS 成功，请确认 config.json 中 smtp_port 与服务端要求一致")
         return 0
     except smtplib.SMTPAuthenticationError as e:
         logger.error("[FAIL] 587 登录也失败: %s", e.smtp_error)

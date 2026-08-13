@@ -1,5 +1,9 @@
 # AI 周报生成器 (AIWeeklyReportMaster)
 
+<p align="center">
+  <img src="catom technology.svg" alt="Catom Technology" width="600">
+</p>
+
 一个基于 Python 的 AI 周报自动生成系统，从 CRM 接口自动下载当周的单个工时 Excel，提取任务列内容去重汇总后调用大模型（MiniMax / DeepSeek / OpenCode / Qwen）生成结构化周报，经钉钉人工审核后通过钉钉和腾讯企业邮箱自动发送给指定人员。
 
 ---
@@ -7,6 +11,7 @@
 ## 目录
 
 - [功能特性](#功能特性)
+- [安全特性](#安全特性)
 - [项目结构](#项目结构)
 - [快速开始](#快速开始)
 - [配置文件说明](#配置文件说明)
@@ -39,9 +44,50 @@
 - **完善的错误处理**：HTTP 状态码细分（401/403/404/429/5xx）、超时分类、provider 切换建议
 - **Token 统计**：终端打印每次调用的 token 使用情况
 - **环境变量支持**：API Key、邮箱密码、CRM Token 均可通过环境变量注入，便于 CI/CD
+- **敏感信息加密存储**：CRM Token 刷新后自动**加密**落盘（Windows 使用 DPAPI，与当前用户绑定；非 Windows 回退机器特征码混淆），避免明文写入 config.json，旧版明文自动兼容
+- **启动配置校验**：启动时自动校验**已启用功能**的关键配置（AI provider api_key、CRM 凭证、邮箱发件人/密码/收件人、钉钉 app_key/app_secret），缺失时汇总给出清晰提示并停止执行
+- **发送内容长度边界**：`email.max_chars` 控制邮件正文最大长度，超长自动截断并告警，避免邮件过大或 SMTP 拒收
 - **定时任务**：支持注册 Windows 计划任务，每周一自动执行
 - **节假日检查**：自动跳过法定节假日和周末，支持调休上班日判断
 - **钉钉 AI 问答机器人**：将钉钉机器人接入大模型，用户可直接向机器人提问，由大模型结合预设人设参数（如"你是公司的 AI 周报机器人"）自动回答
+
+---
+
+## 安全特性
+
+项目在以下方面加强了敏感信息与运行安全：
+
+### 1. 敏感信息加密存储（CRM Token）
+
+- CRM Token 在 token 失效自动刷新后，**加密后**写回 `config.json`，不再以明文落盘
+- **Windows**：使用系统自带 DPAPI（`CryptProtectData`）加密，密文仅当前 Windows 用户可解密（复制到其它机器/用户无法解密）
+- **非 Windows**：回退到基于机器特征码的 XOR 混淆（强度有限，仅防止明文落盘）
+- 密文格式为 `enc:v1:...` 前缀 + Base64，旧版明文 token（无前缀）与 `CRM_TOKEN` 环境变量**自动兼容**，无需迁移
+- 解密失败（如配置文件被复制到其它机器）会给出清晰提示，可重新配置 `crm.token` 或 `CRM_TOKEN` 环境变量
+
+相关代码：[crm_downloader.py](crm_downloader.py) 中 `encrypt_secret()` / `decrypt_secret()`
+
+### 2. 启动关键配置校验
+
+程序启动时（`weekly_report.py`）自动执行 `validate_required_config()`，按**已启用功能**校验关键配置是否齐全，缺失时汇总输出全部缺失项并停止执行（错误码 `CONFIG_ERROR`），避免运行到中途才发现配置缺失：
+
+| 已启用功能       | 校验内容                                                         |
+| ---------------- | ---------------------------------------------------------------- |
+| AI 生成（始终）  | 至少一个 provider 配置了 `api_key`（config.json 或对应环境变量） |
+| `crm.enabled`    | `crm.url` + `crm.token`/`CRM_TOKEN`，或完整自动登录配置          |
+| `email.enabled`  | 发件人（`email.sender`/`EMAIL_SENDER`）、密码、收件人列表        |
+| `dingtalk.enabled` | `app_key` / `app_secret`（或 `DINGTALK_APP_KEY` / `DINGTALK_APP_SECRET`） |
+
+> 未启用的模块不做校验，避免误报。
+
+相关代码：[config_manager.py](config_manager.py) 中 `validate_required_config()`
+
+### 3. 发送内容长度边界
+
+- 邮件正文受 `email.max_chars`（默认 30000）限制，超长自动截断并记录告警日志，避免邮件过大或 SMTP 服务拒收
+- 钉钉侧已有对应护栏：`dingtalk.preview_max_chars`（审核预览）、`chatbot.max_reply_chars`（AI 问答回复）
+
+相关代码：[email_sender.py](email_sender.py) 中 `send_report_email()`
 
 ---
 
@@ -69,6 +115,7 @@ AIWeeklyReportMaster/
 ├── config.example.json          # 配置模板（提交到 git 供参考）
 ├── .env.example                 # 环境变量模板（提交到 git 供参考）
 ├── requirements.txt             # Python 依赖
+├── catom technology.svg         # 项目 Logo（README 顶部展示）
 ├── excel_files/                 # Excel 文件存放目录（CRM 下载目录 / 手工放置目录，仅处理最新一个文件）
 ├── reports/                     # 周报输出目录（自动生成）
 ├── logs/                        # 运行日志目录（自动生成，按周报名称命名，如 Vue2026.7.13-7.19周报.txt）
@@ -147,6 +194,7 @@ python weekly_report.py
 ```json
 {
   "provider": "minimax",
+  "fallback_providers": [],
   "providers": {
     "minimax":   { "api_key": "", "base_url": "...", "model": "...", "thinking_param": {...}, "max_tokens_field": "..." },
     "deepseek":  { "api_key": "", "base_url": "...", "model": "...", "thinking_param": {...}, "max_tokens_field": "..." },
@@ -175,7 +223,11 @@ python weekly_report.py
     "project_oid_list": [],
     "download_dir": "excel_files",
     "export_prefix": "",
-    "timeout": 60
+    "timeout": 60,
+    "login_url": "https://crm.example.com/rest/userService/v1/user/userLoginPlm",
+    "username": "",
+    "password": "",
+    "app_id": "Chrome(149.0.0.0)"
   },
   "email": {
     "enabled": false,
@@ -186,7 +238,8 @@ python weekly_report.py
     "recipients": [],
     "cc": [],
     "subject_template": "Vue 周报 {last_week_range}",
-    "attach_report": true
+    "attach_report": true,
+    "max_chars": 30000
   }
 }
 ```
@@ -196,6 +249,7 @@ python weekly_report.py
 | 字段                     | 说明                                                                          | 默认值                         |
 | ------------------------ | ----------------------------------------------------------------------------- | ------------------------------ |
 | `provider`             | 当前使用的 AI 服务商                                                          | `minimax`                    |
+| `fallback_providers`   | 备用 provider 列表，主 provider 调用失败时依次降级（如 `["deepseek", "qwen"]`） | `[]`                          |
 | `providers`            | 各 AI 服务商的配置（详见下节）                                                | -                              |
 | `excel_folder`         | Excel 文件所在文件夹（绝对或相对路径），未启用 CRM 时取该目录最新修改的一个文件 | `./excel_files`              |
 | `excel_extensions`     | 支持的 Excel 扩展名                                                           | `[".xlsx", ".xls", ".xlsm"]` |
@@ -322,7 +376,7 @@ python weekly_report.py --provider opencode --model gpt-5.5
 | -------------------- | ------------------------------------------------ | ------------------------------------------------- |
 | `enabled`          | 是否启用 CRM 接口下载                            | `true` / `false`                              |
 | `url`              | CRM 工时导出接口地址                             | `https://your-crm-host/.../exportWorkHourItems` |
-| `token`            | authorization 头中`Bearer:` 后面的 JWT token   | `eyJhbGciOiJIUzUxMiJ9...`                       |
+| `token`            | authorization 头中`Bearer:` 后面的 JWT token（自动刷新后以 `enc:v1:...` 密文落盘） | `eyJhbGciOiJIUzUxMiJ9...`                       |
 | `userid`           | 请求头 userid 字段（CRM 用户 ID）                | `YOUR_USER_ID`                                  |
 | `tyinjectparams`   | 请求头 tyinjectparams 字段（CRM 注入参数，可选） | `YOUR_INJECT_PARAMS_OR_EMPTY`                   |
 | `org_oid_list`     | 组织 OID 列表                                    | `["YOUR_ORG_OID"]`                              |
@@ -364,6 +418,17 @@ python weekly_report.py
 ```
 
 环境变量会自动覆盖 `config.json` 中的 `crm.token` 字段。
+
+### CRM Token 自动加密落盘
+
+当 token 失效时（HTTP 401），系统会自动调用 `crm.login_url` 登录接口刷新新 token，并**加密后**写回 `config.json`：
+
+- Windows 下使用系统 DPAPI 加密，密文仅当前用户可解密
+- 非 Windows 平台回退到机器特征码 XOR 混淆
+- 落盘密文以 `enc:v1:` 开头，运行读取时自动解密，无需手动处理
+- 若你之前手动在 `config.json` 填过明文 token，仍可正常使用（兼容旧明文），下次自动刷新后会转为密文
+
+> ⚠️ 注意：DPAPI 加密与 Windows 用户绑定，**不要**将 `config.json` 直接复制到其它电脑使用（token 无法解密）。如需迁移，重新抓取 token 填入即可。
 
 ### 跳过 CRM 接口下载
 
@@ -446,7 +511,8 @@ python weekly_report.py --no-crm
     "recipients": ["leader@company.com"],
     "cc": ["colleague@company.com"],
     "subject_template": "Vue 周报 {last_week_range}",
-    "attach_report": true
+    "attach_report": true,
+    "max_chars": 30000
   }
 }
 ```
@@ -464,6 +530,7 @@ python weekly_report.py --no-crm
 | `cc`               | 抄送列表（数组，可为空`[]`）                    | `[]` 或 `["c@xx.com"]`       |
 | `subject_template` | 邮件主题模板，支持日期占位符                      | `"Vue 周报 {last_week_range}"` |
 | `attach_report`    | 是否附上周报`.md` 文件作为附件                  | `true` / `false`             |
+| `max_chars`        | 邮件正文最大字符数，超出自动截断并告警             | `30000`                      |
 
 ### 邮件主题占位符
 
@@ -1142,6 +1209,20 @@ python diagnose_email.py
    $env:EMAIL_PASSWORD="你的客户端专用密码"
    python weekly_report.py
    ```
+3. CRM Token 无需手动维护：失效时会自动登录刷新并**加密落盘**（`enc:v1:` 前缀），不写明文到 `config.json`
+
+### Q11: 启动报错 `启动配置校验失败`
+
+**原因**：已启用的功能缺少关键配置，程序为避免中途失败主动拦截。
+
+**解决方案**：按提示的缺失项逐项补充，常见有：
+
+- 未配置任何 AI provider 的 `api_key`（见 [AI Provider 配置](#ai-provider-配置)）
+- `crm.enabled=true` 但缺少 token 或自动登录配置（见 [CRM 工时接口配置](#crm-工时接口配置)）
+- `email.enabled=true` 但缺发件人/密码/收件人（见 [腾讯企业邮箱配置](#腾讯企业邮箱配置)）
+- `dingtalk.enabled=true` 但缺 `app_key`/`app_secret`（见 [钉钉人工审核配置](#钉钉人工审核配置)）
+
+> 未启用的模块不会被校验，可放心保持为空。
 
 ---
 
@@ -1179,8 +1260,8 @@ register_weekly.ps1 (定时任务注册)
 | 模块                                          | 职责                                              | 主要函数                                                     |
 | --------------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------ |
 | [weekly_report.py](weekly_report.py)           | 主入口、命令行参数、流程编排                      | `main()`, `parse_args()`                                 |
-| [config_manager.py](config_manager.py)         | 配置定义、加载、合并、环境变量                    | `load_config()`                                            |
-| [crm_downloader.py](crm_downloader.py)         | CRM 工时 Excel 接口下载、日期范围计算、文件名解码 | `download_workhour_excel()`, `calc_last_week_workdays()` |
+| [config_manager.py](config_manager.py)         | 配置定义、加载、合并、环境变量、启动关键配置校验    | `load_config()`, `validate_required_config()`   |
+| [crm_downloader.py](crm_downloader.py)         | CRM 工时 Excel 接口下载、日期范围计算、文件名解码、token 加密落盘 | `download_workhour_excel()`, `encrypt_secret()`, `decrypt_secret()` |
 | [excel_aggregator.py](excel_aggregator.py)     | 单个 Excel 文件列识别（B/D/H）、单文件内去重    | `aggregate_excel_content()`                                |
 | [holiday_checker.py](holiday_checker.py)       | 节假日检查（法定假日 + 调休 + 在线 API）          | `is_holiday()`, `should_skip_execution()`                |
 | [llm_client.py](llm_client.py)                 | LLM API 调用、prompt 构建、错误处理               | `call_llm_api()`, `build_prompt()`                       |

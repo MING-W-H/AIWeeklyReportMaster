@@ -1,5 +1,6 @@
 {
   "provider": "minimax",
+  "fallback_providers": [],
   "providers": {
     "minimax": {
       "api_key": "",
@@ -68,7 +69,8 @@
     "recipients": [],
     "cc": [],
     "subject_template": "Vue 周报 {last_week_range}",
-    "attach_report": true
+    "attach_report": true,
+    "max_chars": 30000
   },
   "contact_info": {
     "email": "your_email@example.com",

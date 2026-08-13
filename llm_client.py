@@ -4,7 +4,7 @@
 负责通过 OpenAI 兼容协议调用各 AI provider（minimax/deepseek/opencode/qwen），
 生成周报文本。包含详细的错误处理（HTTP 状态码、超时、网络异常等）。
 """
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, List, Tuple
 
 import re
 
@@ -86,7 +86,7 @@ def build_prompt(excel_text: str, config: Dict[str, Any]) -> str:
 
 # ============ call_llm_api 的职责拆分子函数 ============
 
-def _validate_provider_config(config: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+def _validate_provider_config(config: Dict[str, Any], provider_name: str = None) -> Tuple[str, Dict[str, Any]]:
     """验证 provider 配置，返回 (provider_name, provider配置字典)。
 
     Args:
@@ -98,7 +98,7 @@ def _validate_provider_config(config: Dict[str, Any]) -> Tuple[str, Dict[str, An
     Raises:
         ValueError: provider 未知或 api_key 缺失
     """
-    provider_name = config["provider"]
+    provider_name = provider_name or config["provider"]
     providers = config.get("providers", {})
     if provider_name not in providers:
         raise ValueError(
@@ -379,38 +379,43 @@ def _log_token_usage(usage: Dict[str, Any]) -> None:
     logger.info("       - 总计 Total tokens  : %s", f"{total_tokens:,}")
 
 
-def call_llm_api(prompt: str, config: Dict[str, Any]) -> str:
-    """统一调用 LLM API (OpenAI 兼容协议)。
+def _resolve_provider_names(config: Dict[str, Any]) -> List[str]:
+    """返回需要尝试的 provider 名称列表（主 provider + 备用 provider，去重）。"""
+    names: List[str] = [config["provider"]]
+    for name in config.get("fallback_providers") or []:
+        name = str(name).strip()
+        if name and name not in names:
+            names.append(name)
+    return names
 
-    根据 config["provider"] 选择 minimax / deepseek / opencode / qwen，
-    使用对应 provider 的 base_url / model / api_key 进行请求。
-    """
-    # 1. 参数验证
-    provider_name, prov = _validate_provider_config(config)
+
+def _call_llm_api_once(prompt: str, config: Dict[str, Any], provider_name: str) -> str:
+    """使用指定 provider 调用一次 LLM API 生成周报。"""
+    provider_name, prov = _validate_provider_config(config, provider_name)
     base_url = prov["base_url"]
     model = prov["model"]
 
-    # 2. 构建请求
+    # 构建请求
     headers, payload = _build_request_payload(prompt, prov, config)
 
-    # 3. 记录调用信息
+    # 记录调用信息
     logger.info("调用 %s / %s 生成周报中...", provider_name, model)
     if config.get("thinking_enabled"):
         thinking_status = "enabled" if prov.get("thinking_param") else "not supported by this provider"
         logger.info("思考模式: %s", thinking_status)
 
-    # 4. 发起 HTTP 请求
+    # 发起 HTTP 请求
     response = _send_http_request(
         base_url, headers, payload, config, func_name=f"{provider_name}/{model}"
     )
 
-    # 5. 处理 HTTP 错误
+    # 处理 HTTP 错误
     _handle_http_error(response, provider_name, base_url, model)
 
-    # 6. 解析响应
+    # 解析响应
     content, usage = _parse_llm_response(response, provider_name)
 
-    # 7. 记录 token 统计
+    # 记录 token 统计
     _log_token_usage(usage)
 
     # 仅返回周报正文内容，不输出模型的思考过程
@@ -418,24 +423,32 @@ def call_llm_api(prompt: str, config: Dict[str, Any]) -> str:
     return strip_chat_prefix(content)
 
 
-def call_llm_chat(
+def call_llm_api(prompt: str, config: Dict[str, Any]) -> str:
+    """统一调用 LLM API (OpenAI 兼容协议)，主 provider 失败时自动切换备用 provider。
+
+    根据 config["provider"] 选择 minimax / deepseek / opencode / qwen，
+    可配置 fallback_providers 作为降级列表，主 provider 调用失败时依次尝试。
+    """
+    provider_names = _resolve_provider_names(config)
+    for i, provider_name in enumerate(provider_names):
+        try:
+            return _call_llm_api_once(prompt, config, provider_name)
+        except (ValueError, RuntimeError) as e:
+            if i < len(provider_names) - 1:
+                logger.warning("provider '%s' 调用失败，切换到备用 provider '%s': %s",
+                               provider_name, provider_names[i + 1], e)
+                continue
+            raise
+
+
+def _call_llm_chat_once(
     messages: list,
     config: Dict[str, Any],
-    system_prompt: str = None,
+    system_prompt: str,
+    provider_name: str,
 ) -> str:
-    """多轮对话调用（供钉钉 AI 机器人等问答场景使用）。
-
-    Args:
-        messages: 对话历史 [{role: "user"|"assistant", content: str}, ...]，
-                  仅传入用户/助手的交替消息，系统人设由 system_prompt 单独预设
-        config: 全局配置
-        system_prompt: 预设系统提示词（人设参数），如"你是公司的 AI 周报机器人…"，
-                      为 None 时使用周报默认人设
-
-    Returns:
-        模型回答文本（自动移除思考过程块，保留最终回答）
-    """
-    provider_name, prov = _validate_provider_config(config)
+    """使用指定 provider 调用一次多轮对话。"""
+    provider_name, prov = _validate_provider_config(config, provider_name)
     base_url = prov["base_url"]
     model = prov["model"]
 
@@ -454,6 +467,36 @@ def call_llm_chat(
 
     # 移除思考模式的思考过程块（如 <think>...</think>），避免泄露给用户
     return strip_thinking_block(content)
+
+
+def call_llm_chat(
+    messages: list,
+    config: Dict[str, Any],
+    system_prompt: str = None,
+) -> str:
+    """多轮对话调用（供钉钉 AI 机器人等问答场景使用）。
+
+    Args:
+        messages: 对话历史 [{role: "user"|"assistant", content: str}, ...]，
+                  仅传入用户/助手的交替消息，系统人设由 system_prompt 单独预设
+        config: 全局配置
+        system_prompt: 预设系统提示词（人设参数），如"你是公司的 AI 周报机器人…"，
+                      为 None 时使用周报默认人设
+
+    Returns:
+        模型回答文本（自动移除思考过程块，保留最终回答）。主 provider 失败时
+        自动切换到 config.fallback_providers 中的备用 provider。
+    """
+    provider_names = _resolve_provider_names(config)
+    for i, provider_name in enumerate(provider_names):
+        try:
+            return _call_llm_chat_once(messages, config, system_prompt, provider_name)
+        except (ValueError, RuntimeError) as e:
+            if i < len(provider_names) - 1:
+                logger.warning("provider '%s' 调用失败，切换到备用 provider '%s': %s",
+                               provider_name, provider_names[i + 1], e)
+                continue
+            raise
 
 
 def strip_thinking_block(text: str) -> str:

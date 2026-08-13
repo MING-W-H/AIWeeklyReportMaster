@@ -19,7 +19,7 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
         pass
 
 from config_manager import load_config, render_notification
-from dingtalk_confirmer import _get_credentials, _send_markdown_oto
+from dingtalk_confirmer import get_credentials, send_markdown_oto
 from logger import get_logger
 
 logger = get_logger(__name__)
@@ -38,7 +38,7 @@ def main() -> int:
         return 1
 
     try:
-        app_key, app_secret = _get_credentials(dt_cfg)
+        app_key, app_secret = get_credentials(dt_cfg)
     except ValueError as e:
         logger.error("%s", e)
         return 1
@@ -69,7 +69,7 @@ def main() -> int:
             return 0
 
     try:
-        _send_markdown_oto(app_key, app_secret, recipient_ids, notice_title, notice_text)
+        send_markdown_oto(app_key, app_secret, recipient_ids, notice_title, notice_text)
     except RuntimeError as e:
         logger.error("发送失败: %s", e)
         return 2

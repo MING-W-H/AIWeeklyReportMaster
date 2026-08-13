@@ -80,6 +80,12 @@ def send_report_email(
     msg["Subject"] = Header(subject, "utf-8")
     msg["Date"] = formatdate(localtime=True)
 
+    # 邮件正文长度护栏：超长截断，避免邮件过大或 SMTP 拒收
+    max_chars = int(email_cfg.get("max_chars", 30000))
+    if len(report_text) > max_chars:
+        logger.warning("邮件正文超长 (%d 字符)，已截断至 %d 字符", len(report_text), max_chars)
+        report_text = report_text[:max_chars] + "\n\n...（正文过长，已截断）"
+
     # 邮件正文：HTML 格式（Markdown 转 HTML）
     html_body = markdown_to_html(report_text)
     msg.attach(MIMEText(html_body, "html", "utf-8"))
