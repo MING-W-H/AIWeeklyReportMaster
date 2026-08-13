@@ -1,7 +1,7 @@
 # AI 周报生成器 (AIWeeklyReportMaster)
 
 <div align="center">
-   <img src="catom-technology.svg" width="30%" alt="catom technology"/>
+   <img src="images/catom-technology.svg" width="30%" alt="catom technology"/>
 </div>
 
 一个基于 Python 的 AI 周报自动生成系统，从 CRM 接口自动下载当周的单个工时 Excel，提取任务列内容去重汇总后调用大模型（MiniMax / DeepSeek / OpenCode / Qwen）生成结构化周报，经钉钉人工审核后通过钉钉和腾讯企业邮箱自动发送给指定人员。
@@ -115,7 +115,8 @@ AIWeeklyReportMaster/
 ├── config.example.json          # 配置模板（提交到 git 供参考）
 ├── .env.example                 # 环境变量模板（提交到 git 供参考）
 ├── requirements.txt             # Python 依赖
-├── catom-technology.svg         # 项目 Logo（README 顶部展示）
+├── images/                      # 图标资源目录（项目 Logo 等）
+│   └── catom-technology.svg     # 项目 Logo（README 顶部展示）
 ├── excel_files/                 # Excel 文件存放目录（CRM 下载目录 / 手工放置目录，仅处理最新一个文件）
 ├── reports/                     # 周报输出目录（自动生成）
 ├── logs/                        # 运行日志目录（自动生成，按周报名称命名，如 Vue2026.7.13-7.19周报.txt）
