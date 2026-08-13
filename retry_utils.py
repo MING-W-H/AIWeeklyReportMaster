@@ -5,7 +5,7 @@
 """
 import random
 import time
-from typing import Callable, Any, Tuple, Optional
+from typing import Callable, Any, Tuple
 
 import requests
 
@@ -36,9 +36,6 @@ def retry_request(
         retryable_statuses: 可重试的 HTTP 状态码
         func_name: 函数描述（用于日志输出）
     """
-    last_exc: Optional[Exception] = None
-    last_resp: Optional[requests.Response] = None
-
     for attempt in range(max_retries + 1):
         try:
             resp = func(*args, **kwargs)
@@ -53,7 +50,6 @@ def retry_request(
                 continue
             return resp
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
-            last_exc = e
             if attempt == max_retries:
                 raise
             delay = base_delay * (backoff ** attempt) + random.uniform(0, 0.5)
@@ -62,7 +58,6 @@ def retry_request(
             time.sleep(delay)
             continue
         except requests.exceptions.RequestException as e:
-            last_exc = e
             if attempt == max_retries:
                 raise
             delay = base_delay * (backoff ** attempt) + random.uniform(0, 0.5)
@@ -70,10 +65,3 @@ def retry_request(
                            func_name, e, delay, attempt + 1, max_retries)
             time.sleep(delay)
             continue
-
-    # 所有重试耗尽
-    if last_exc:
-        raise last_exc  # type: ignore[misc]
-    if last_resp is not None:
-        return last_resp
-    raise RuntimeError(f"{func_name} 重试耗尽，请求失败")

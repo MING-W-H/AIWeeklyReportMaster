@@ -40,7 +40,7 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
 # 抑制 openpyxl 读取部分 Excel 时产生的样式警告（不影响数据读取）
 warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
 
-from config_manager import PROVIDER_PRESETS, load_config
+from config_manager import PROVIDER_PRESETS, load_config, validate_required_config
 from crm_downloader import download_workhour_excel
 from dingtalk_confirmer import send_dingtalk_report, send_failure_alert, wait_for_confirmation
 from email_sender import send_report_email
@@ -63,6 +63,7 @@ class ErrorCode:
     LLM_ERROR = 2
     EMAIL_ERROR = 3
     DINGTALK_ERROR = 4
+    CONFIG_ERROR = 11
 
 
 def _acquire_lock() -> bool:
@@ -326,6 +327,7 @@ def handle_dingtalk_review(
     """
     dt_cfg = config.get("dingtalk", {})
     need_confirm = dt_cfg.get("enabled", False) and not args.no_confirm
+    decision = None  # 仅 need_confirm 为 True 时在下方赋值，此处显式初始化避免隐式依赖短路求值
 
     # 钉钉人工审核
     if need_confirm:
@@ -400,6 +402,11 @@ def main() -> int:
         return ErrorCode.LOCK_FAILED
     try:
         return _run(args)
+    except ValueError as e:
+        logger.error("%s", e)
+        if args.debug:
+            logger.debug("配置异常堆栈:", exc_info=True)
+        return ErrorCode.CONFIG_ERROR
     finally:
         _release_lock()
 
@@ -409,6 +416,13 @@ def _run(args: argparse.Namespace) -> int:
 
     # 1. 应用命令行参数覆盖配置（必须在日志初始化之前，否则日志文件名无法反映 --output 等参数）
     apply_args_to_config(args, config)
+
+    # 1.5 启动前校验关键配置是否齐全，缺失时给出清晰提示
+    missing = validate_required_config(config)
+    if missing:
+        raise ValueError(
+            "启动配置校验失败，缺少以下关键配置：\n  - " + "\n  - ".join(missing)
+        )
 
     # 2. 初始化日志系统
     log_path = init_run_logging(config, args.debug)

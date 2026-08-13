@@ -40,11 +40,11 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
 
 from config_manager import load_config
 from dingtalk_confirmer import (
-    _get_credentials,
+    get_credentials,
     get_userid_by_mobile,
     list_dept_members,
     list_dept_subs,
-    _run_stream_listener,
+    run_stream_listener,
 )
 from logger import get_logger
 
@@ -112,7 +112,7 @@ async def _run_stream(app_key: str, app_secret: str, group_mode: bool = False) -
     client.register_callback_handler(
         dingtalk_stream.chatbot.ChatbotMessage.TOPIC, handler
     )
-    listener_task = asyncio.create_task(_run_stream_listener(client, done_event, 300))
+    listener_task = asyncio.create_task(run_stream_listener(client, done_event, 300))
     try:
         await asyncio.wait_for(done_event.wait(), timeout=300)
     except asyncio.TimeoutError:
@@ -144,7 +144,7 @@ def main() -> int:
     config = load_config()
     dt_cfg = config.get("dingtalk", {})
     try:
-        app_key, app_secret = _get_credentials(dt_cfg)
+        app_key, app_secret = get_credentials(dt_cfg)
     except ValueError as e:
         logger.error("%s", e)
         return 1

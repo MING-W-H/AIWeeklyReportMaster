@@ -44,9 +44,9 @@ import requests
 
 from config_manager import load_config, render_notification
 from dingtalk_confirmer import (
-    _get_credentials,
-    _get_oapi_access_token,
-    _send_markdown_group,
+    get_credentials,
+    get_oapi_access_token,
+    send_markdown_group,
 )
 from holiday_checker import is_holiday
 from logger import get_logger
@@ -63,7 +63,7 @@ def _resolve_names(app_key: str, app_secret: str, user_ids) -> dict:
     """尽力把 userId 解析为姓名（权限不足时回退为 userId 本身）。"""
     if not user_ids:
         return {}
-    token = _get_oapi_access_token(app_key, app_secret)
+    token = get_oapi_access_token(app_key, app_secret)
     names = {}
     for uid in user_ids:
         try:
@@ -104,7 +104,7 @@ def main() -> int:
         return 1
 
     try:
-        app_key, app_secret = _get_credentials(dt_cfg)
+        app_key, app_secret = get_credentials(dt_cfg)
     except ValueError as e:
         logger.error("%s", e)
         return 1
@@ -158,8 +158,8 @@ def main() -> int:
             return 0
 
     try:
-        _send_markdown_group(app_key, app_secret, conversation_id, title, text,
-                             at_user_ids=remind_ids)
+        send_markdown_group(app_key, app_secret, conversation_id, title, text,
+                            at_user_ids=remind_ids)
     except RuntimeError as e:
         logger.error("发送失败: %s", e)
         return 2

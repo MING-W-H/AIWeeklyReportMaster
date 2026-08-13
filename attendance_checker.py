@@ -6,7 +6,7 @@
 输出明细表格与汇总。
 
 使用方式：
-    1. 按 userId 查询（推荐，最多一次 50 人）：
+    1. 按 userId 查询（推荐，逗号分隔）：
        python attendance_checker.py --userids user001,user002,user003
        python attendance_checker.py --userids user001 --start 2026-07-27 --end 2026-08-02
 
@@ -56,16 +56,15 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
 import requests
 
 from config_manager import load_config
+from dingtalk_confirmer import get_credentials, get_oapi_access_token, list_dept_members
 from logger import get_logger
 from retry_utils import retry_request
 
 logger = get_logger(__name__)
 
 # ============ 钉钉开放平台接口 ============
-_GETTOKEN_URL = "https://oapi.dingtalk.com/gettoken"
 _GETSIMPLE_LIST_URL = "https://oapi.dingtalk.com/attendance/list"
 _GET_USER_URL = "https://oapi.dingtalk.com/topapi/v2/user/get"
-_LIST_USER_URL = "https://oapi.dingtalk.com/topapi/v2/user/list"
 
 # 单次接口最多查询 7 天（含首尾）
 _MAX_DAYS_PER_REQUEST = 7
@@ -99,40 +98,6 @@ SOURCE_TYPE_MAP = {
     "BEACON": "Beacon",
     "DING_ATM": "钉钉考勤机",
 }
-# ============ 凭证与 token ============
-def _get_credentials(config: Dict[str, Any]) -> Tuple[str, str]:
-    """读取钉钉应用凭证：环境变量 > config.json。"""
-    import os
-
-    dt_cfg = config.get("dingtalk", {})
-    app_key = (os.getenv("DINGTALK_APP_KEY") or dt_cfg.get("app_key", "")).strip()
-    app_secret = (os.getenv("DINGTALK_APP_SECRET") or dt_cfg.get("app_secret", "")).strip()
-    if not app_key or not app_secret:
-        raise RuntimeError(
-            "钉钉凭证未配置：请在 .env 中设置 DINGTALK_APP_KEY / DINGTALK_APP_SECRET，"
-            "或在 config.json 的 dingtalk.app_key / app_secret 中填入"
-        )
-    return app_key, app_secret
-
-
-def _get_oapi_token(app_key: str, app_secret: str) -> str:
-    """获取旧版 oapi access_token（考勤接口使用该端点）。"""
-    resp = retry_request(
-        requests.get,
-        _GETTOKEN_URL,
-        params={"appkey": app_key, "appsecret": app_secret},
-        timeout=15,
-        max_retries=2,
-        base_delay=1.0,
-        backoff=2.0,
-        func_name="钉钉 oapi access_token 获取",
-    )
-    data = resp.json()
-    if data.get("errcode") != 0:
-        raise RuntimeError(f"获取钉钉 access_token 失败: {data.get('errmsg', data)}")
-    return data.get("access_token", "")
-
-
 # ============ 用户解析 ============
 def _resolve_names(token: str, user_ids: List[str]) -> Dict[str, str]:
     """尽力把 userId 解析为姓名（权限不足时回退为 userId）。"""
@@ -158,40 +123,6 @@ def _resolve_names(token: str, user_ids: List[str]) -> Dict[str, str]:
     return names
 
 
-def _list_dept_members(token: str, dept_id: int) -> List[Dict[str, str]]:
-    """列出指定部门下的成员（name + userid）。需已开通通讯录读权限。"""
-    members: List[Dict[str, str]] = []
-    cursor = 0
-    while True:
-        resp = retry_request(
-            requests.post,
-            _LIST_USER_URL,
-            params={"access_token": token},
-            json={"dept_id": dept_id, "cursor": cursor, "size": 100},
-            timeout=15,
-            max_retries=2,
-            base_delay=1.0,
-            backoff=2.0,
-            func_name="钉钉部门成员列表查询",
-        )
-        data = resp.json()
-        if data.get("errcode") != 0:
-            raise RuntimeError(
-                f"钉钉成员列表查询失败: {data.get('errmsg', data)}。"
-                "--dept 模式需要「通讯录部门信息读权限」和「成员信息读权限」"
-            )
-        result = data.get("result", {})
-        for user in result.get("list", []):
-            members.append({
-                "name": user.get("name", ""),
-                "userid": user.get("userid", ""),
-            })
-        if not result.get("has_more"):
-            break
-        cursor = result.get("next_cursor", 0)
-    return members
-
-
 # ============ 考勤查询 ============
 def _chunk_date_ranges(start: datetime, end: datetime,
                        chunk_days: int = _MAX_DAYS_PER_REQUEST
@@ -208,43 +139,49 @@ def _chunk_date_ranges(start: datetime, end: datetime,
 
 def _fetch_attendance(token: str, user_ids: List[str],
                       start: datetime, end: datetime) -> List[Dict[str, Any]]:
-    """分页 + 分段查询考勤打卡结果，返回原始记录列表。"""
+    """分页 + 分段查询考勤打卡结果，返回原始记录列表。
+
+    钉钉 attendance/list 接口单次最多 50 个 userId，因此除按日期分段外，
+    还需将 user_ids 按 50 人分片请求（兼容 --dept / 默认名单超过 50 人的场景）。
+    """
     records: List[Dict[str, Any]] = []
     for cs, ce in _chunk_date_ranges(start, end):
-        offset = 0
-        while True:
-            payload = {
-                "workDateFrom": cs.strftime("%Y-%m-%d %H:%M:%S"),
-                "workDateTo": ce.strftime("%Y-%m-%d %H:%M:%S"),
-                "userIdList": user_ids,
-                "offset": offset,
-                "limit": _PAGE_SIZE,
-                "isI18n": False,
-            }
-            resp = retry_request(
-                requests.post,
-                _GETSIMPLE_LIST_URL,
-                params={"access_token": token},
-                json=payload,
-                timeout=20,
-                max_retries=2,
-                base_delay=1.0,
-                backoff=2.0,
-                func_name="钉钉考勤记录查询",
-            )
-            data = resp.json()
-            if data.get("errcode") != 0:
-                errmsg = data.get("errmsg", str(data))
-                if "权限" in errmsg or "60011" in str(data.get("errcode")):
-                    raise RuntimeError(
-                        f"考勤查询失败: {errmsg}。请在钉钉开发者后台「权限管理」中"
-                        f"申请「查询企业考勤数据权限」后重试"
-                    )
-                raise RuntimeError(f"考勤查询失败: {errmsg}")
-            records.extend(data.get("recordresult") or [])
-            if not data.get("hasMore"):
-                break
-            offset += _PAGE_SIZE
+        for i in range(0, len(user_ids), _MAX_USERS_PER_REQUEST):
+            batch = user_ids[i:i + _MAX_USERS_PER_REQUEST]
+            offset = 0
+            while True:
+                payload = {
+                    "workDateFrom": cs.strftime("%Y-%m-%d %H:%M:%S"),
+                    "workDateTo": ce.strftime("%Y-%m-%d %H:%M:%S"),
+                    "userIdList": batch,
+                    "offset": offset,
+                    "limit": _PAGE_SIZE,
+                    "isI18n": False,
+                }
+                resp = retry_request(
+                    requests.post,
+                    _GETSIMPLE_LIST_URL,
+                    params={"access_token": token},
+                    json=payload,
+                    timeout=20,
+                    max_retries=2,
+                    base_delay=1.0,
+                    backoff=2.0,
+                    func_name="钉钉考勤记录查询",
+                )
+                data = resp.json()
+                if data.get("errcode") != 0:
+                    errmsg = data.get("errmsg", str(data))
+                    if "权限" in errmsg or "60011" in str(data.get("errcode")):
+                        raise RuntimeError(
+                            f"考勤查询失败: {errmsg}。请在钉钉开发者后台「权限管理」中"
+                            f"申请「查询企业考勤数据权限」后重试"
+                        )
+                    raise RuntimeError(f"考勤查询失败: {errmsg}")
+                records.extend(data.get("recordresult") or [])
+                if not data.get("hasMore"):
+                    break
+                offset += _PAGE_SIZE
     return records
 
 
@@ -433,7 +370,7 @@ def main() -> int:
             "  python attendance_checker.py --excel attendance.xlsx"
         ),
     )
-    parser.add_argument("--userids", help="员工 userId 列表，逗号分隔，最多 50 人")
+    parser.add_argument("--userids", help="员工 userId 列表，逗号分隔")
     parser.add_argument("--dept", type=int, help="部门 ID，查询部门下全部成员")
     parser.add_argument("--start", help="开始日期 YYYY-MM-DD（默认 config attendance.start_date，再默认最近 7 天）")
     parser.add_argument("--end", help="结束日期 YYYY-MM-DD（默认 config attendance.end_date，再默认今天）")
@@ -445,8 +382,8 @@ def main() -> int:
     # 加载配置与凭证
     config = load_config()
     try:
-        app_key, app_secret = _get_credentials(config)
-    except RuntimeError as e:
+        app_key, app_secret = get_credentials(config.get("dingtalk", {}))
+    except ValueError as e:
         logger.error("%s", e)
         return 1
 
@@ -479,12 +416,12 @@ def main() -> int:
         return 1
 
     logger.info("正在获取钉钉 access_token ...")
-    token = _get_oapi_token(app_key, app_secret)
+    token = get_oapi_access_token(app_key, app_secret)
 
     # 确定用户列表
     if args.dept:
         logger.info("正在查询部门 %s 的成员 ...", args.dept)
-        members = _list_dept_members(token, args.dept)
+        members = list_dept_members(config, args.dept)
         if not members:
             logger.warning("部门 %s 下未查询到成员", args.dept)
             return 0

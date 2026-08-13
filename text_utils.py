@@ -6,6 +6,7 @@
 - markdown_to_html: 将 Markdown 文本简单转换为 HTML（用于邮件正文）
 """
 import re
+from html import escape
 from typing import List
 
 
@@ -59,18 +60,32 @@ def markdown_to_html(md_text: str) -> str:
     """将 Markdown 文本简单转换为 HTML（用于邮件正文）。
 
     仅做基础转换：标题、列表、表格、加粗、代码块。
-    不依赖第三方库，保持轻量。
+    不依赖第三方库，保持轻量。所有文本内容均做 HTML 转义，避免破坏邮件正文。
     """
+
+    def esc(s: str) -> str:
+        return escape(s, quote=False)
+
+    def apply_bold(s: str) -> str:
+        return re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", s)
+
     lines = md_text.splitlines()
     html_parts: List[str] = []
     in_table = False
     in_code = False
+    in_list = False
 
     for line in lines:
         stripped = line.strip()
 
         # 代码块
         if stripped.startswith("```"):
+            if in_table:
+                html_parts.append("</tbody></table>")
+                in_table = False
+            if in_list:
+                html_parts.append("</ul>")
+                in_list = False
             if in_code:
                 html_parts.append("</code></pre>")
                 in_code = False
@@ -87,6 +102,9 @@ def markdown_to_html(md_text: str) -> str:
             if in_table:
                 html_parts.append("</tbody></table>")
                 in_table = False
+            if in_list:
+                html_parts.append("</ul>")
+                in_list = False
             html_parts.append("")
             continue
 
@@ -94,15 +112,18 @@ def markdown_to_html(md_text: str) -> str:
         if "|" in stripped and stripped.startswith("|"):
             cells = [c.strip() for c in stripped.split("|")[1:-1]]
             if not in_table:
+                if in_list:
+                    html_parts.append("</ul>")
+                    in_list = False
                 html_parts.append('<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;">')
-                html_parts.append("<thead><tr>" + "".join(f"<th>{c}</th>" for c in cells) + "</tr></thead>")
+                html_parts.append("<thead><tr>" + "".join(f"<th>{esc(c)}</th>" for c in cells) + "</tr></thead>")
                 html_parts.append("<tbody>")
                 in_table = True
             elif all(set(c.strip()) <= set("- :") for c in cells):
                 # 分隔行（如 |---|---|），跳过
                 continue
             else:
-                html_parts.append("<tr>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>")
+                html_parts.append("<tr>" + "".join(f"<td>{esc(c)}</td>" for c in cells) + "</tr>")
             continue
 
         if in_table:
@@ -111,23 +132,37 @@ def markdown_to_html(md_text: str) -> str:
 
         # 标题
         if stripped.startswith("### "):
-            html_parts.append(f"<h3>{stripped[4:]}</h3>")
+            if in_list:
+                html_parts.append("</ul>")
+                in_list = False
+            html_parts.append(f"<h3>{esc(stripped[4:])}</h3>")
         elif stripped.startswith("## "):
-            html_parts.append(f"<h2>{stripped[3:]}</h2>")
+            if in_list:
+                html_parts.append("</ul>")
+                in_list = False
+            html_parts.append(f"<h2>{esc(stripped[3:])}</h2>")
         elif stripped.startswith("# "):
-            html_parts.append(f"<h1>{stripped[2:]}</h1>")
-        # 列表
-        # 列表（应用加粗转换）
+            if in_list:
+                html_parts.append("</ul>")
+                in_list = False
+            html_parts.append(f"<h1>{esc(stripped[2:])}</h1>")
         elif stripped.startswith("- "):
-          bolded = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", stripped[2:])
-          html_parts.append(f"<li>{bolded}</li>")
+            # 列表项（应用加粗转换）
+            if not in_list:
+                html_parts.append("<ul>")
+                in_list = True
+            html_parts.append(f"<li>{apply_bold(esc(stripped[2:]))}</li>")
         else:
             # 加粗 **text** → <strong>text</strong>
-            bolded = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", stripped)
-            html_parts.append(f"<p>{bolded}</p>")
+            if in_list:
+                html_parts.append("</ul>")
+                in_list = False
+            html_parts.append(f"<p>{apply_bold(esc(stripped))}</p>")
 
     if in_table:
         html_parts.append("</tbody></table>")
+    if in_list:
+        html_parts.append("</ul>")
     if in_code:
         html_parts.append("</code></pre>")
 
