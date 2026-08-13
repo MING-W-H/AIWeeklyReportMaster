@@ -1,8 +1,8 @@
 # AI 周报生成器 (AIWeeklyReportMaster)
 
-<p align="center">
-  <img src="catom-technology.svg" alt="Catom Technology" width="600">
-</p>
+<div align="center">
+   <img src="catom-technology.svg" width="30%" alt="catom technology"/>
+</div>
 
 一个基于 Python 的 AI 周报自动生成系统，从 CRM 接口自动下载当周的单个工时 Excel，提取任务列内容去重汇总后调用大模型（MiniMax / DeepSeek / OpenCode / Qwen）生成结构化周报，经钉钉人工审核后通过钉钉和腾讯企业邮箱自动发送给指定人员。
 
