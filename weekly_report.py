@@ -46,7 +46,8 @@ from dingtalk_confirmer import send_dingtalk_report, send_failure_alert, wait_fo
 from email_sender import send_report_email
 from excel_aggregator import aggregate_excel_content
 from holiday_checker import should_skip_execution
-from llm_client import FORMAT_TEMPLATES, build_prompt, call_llm_api
+from llm_client import (FORMAT_TEMPLATES, build_prompt, build_revision_messages,
+                        call_llm_api, call_llm_chat)
 from logger import get_logger, init_logging
 from output_resolver import render_template, resolve_output_path
 
@@ -314,54 +315,101 @@ def save_report_to_file(report_text: str, config: dict) -> Path:
     return out_path
 
 
-def handle_dingtalk_review(
-    report_text: str, out_path: Path, config: dict, args: argparse.Namespace
-) -> tuple[bool, Optional[int]]:
-    """处理钉钉人工审核与推送
+def regenerate_report_via_feedback(
+    current_text: str, feedback: str, excel_text: str,
+    config: dict, debug: bool,
+) -> str:
+    """根据审核人反馈，重新发送给大模型生成修订后的周报。
+
+    通过多轮对话携带原始数据上下文（首次生成时的提示词 + 当前周报 + 反馈），
+    让模型在保留原有内容的基础上严格按反馈修订，并输出完整新版周报。
 
     Returns:
-        (should_continue, error_code):
-            should_continue=True 表示审核通过或无需审核，可继续后续步骤；
-            should_continue=False 表示应终止流程（跳过或出错）。
+        重新生成后的完整周报文本
+
+    Raises:
+        RuntimeError: 重新生成失败（LLM 调用失败或返回内容为空）
+    """
+    messages = build_revision_messages(current_text, feedback, config, excel_text)
+    try:
+        new_text = call_llm_chat(messages, config)
+    except (ValueError, RuntimeError) as e:
+        if debug:
+            logger.debug("根据反馈重新生成周报异常堆栈:", exc_info=True)
+        raise RuntimeError(f"根据反馈重新生成周报失败: {e}")
+    if not new_text.strip():
+        raise RuntimeError("根据反馈重新生成周报失败：模型返回内容为空")
+    logger.info("已根据审核人反馈重新生成周报（新版 %d 字符）", len(new_text))
+    return new_text
+
+
+def handle_dingtalk_review(
+    report_text: str, out_path: Path, config: dict, args: argparse.Namespace,
+    excel_text: str = "",
+) -> tuple[Optional[str], Optional[int]]:
+    """处理钉钉人工审核与推送
+
+    Args:
+        excel_text: 原始 Excel 工作数据汇总，用于审核人反馈后重新生成周报
+
+    Returns:
+        (final_report_text, error_code):
+            final_report_text: 审核通过（或无需审核）后应发送的最终周报文本，
+                               审核过程中可能根据反馈被重新生成；
+                               流程终止/出错时返回 None。
             error_code 非 None 时表示出错应返回该码。
     """
     dt_cfg = config.get("dingtalk", {})
     need_confirm = dt_cfg.get("enabled", False) and not args.no_confirm
     decision = None  # 仅 need_confirm 为 True 时在下方赋值，此处显式初始化避免隐式依赖短路求值
+    final_report_text = report_text
 
     # 钉钉人工审核
     if need_confirm:
+        # 重新生成回调：审核人取消并提供反馈 → 反馈发送给大模型重新生成
+        def _regenerate(current_text: str, feedback: str) -> str:
+            return regenerate_report_via_feedback(
+                current_text, feedback, excel_text, config, args.debug
+            )
+
         try:
-            decision, reason = wait_for_confirmation(report_text, out_path.name, config)
+            decision, reason, final_report_text = wait_for_confirmation(
+                report_text, out_path.name, config, regenerate_fn=_regenerate
+            )
         except ValueError as e:
             logger.error("钉钉配置错误: %s", e)
-            return False, ErrorCode.DINGTALK_ERROR
+            return None, ErrorCode.DINGTALK_ERROR
         except RuntimeError as e:
             logger.error("钉钉审核流程异常: %s", e)
             send_failure_alert(config, f"钉钉审核流程异常: {e}")
             if args.debug:
                 logger.debug("钉钉审核流程异常堆栈:", exc_info=True)
-            return False, ErrorCode.DINGTALK_ERROR
+            return None, ErrorCode.DINGTALK_ERROR
         logger.info("钉钉审核结果: %s（%s）", decision, reason)
         if decision != "confirm":
             logger.info("未获得审核确认，跳过钉钉推送与邮件发送。")
-            return False, None  # 非错误，只是跳过后续
+            return None, None  # 非错误，只是跳过后续
+
+        # 审核过程中若按反馈重新生成过，同步更新周报文件
+        if final_report_text != report_text:
+            out_path.write_text(final_report_text, encoding="utf-8")
+            logger.info("周报已按审核反馈更新至: %s", out_path.absolute())
 
     # 发送钉钉周报（审核通过后推送给钉钉接收人）
     if dt_cfg.get("enabled") and (not need_confirm or decision == "confirm"):
         try:
-            send_dingtalk_report(report_text, out_path.name, config)
+            send_dingtalk_report(final_report_text, out_path.name, config)
         except ValueError as e:
             logger.error("钉钉配置错误: %s", e)
-            return False, ErrorCode.DINGTALK_ERROR
+            return None, ErrorCode.DINGTALK_ERROR
         except RuntimeError as e:
             logger.error("钉钉周报发送失败: %s", e)
             send_failure_alert(config, f"钉钉周报发送失败: {e}")
             if args.debug:
                 logger.debug("钉钉周报发送异常堆栈:", exc_info=True)
-            return False, ErrorCode.DINGTALK_ERROR
+            return None, ErrorCode.DINGTALK_ERROR
 
-    return True, None
+    return final_report_text, None
 
 
 def send_email_if_enabled(
@@ -462,11 +510,15 @@ def _run(args: argparse.Namespace) -> int:
     out_path = save_report_to_file(report_text, config)
 
     # 8. 钉钉审核与推送
-    should_continue, error = handle_dingtalk_review(report_text, out_path, config, args)
+    final_report_text, error = handle_dingtalk_review(
+        report_text, out_path, config, args, excel_text
+    )
     if error:
         return error
-    if not should_continue:
+    if final_report_text is None:
         return ErrorCode.SUCCESS
+    # 审核过程中可能按反馈重新生成，后续以最终版本为准
+    report_text = final_report_text
 
     # 9. 发送邮件
     error = send_email_if_enabled(report_text, out_path, config, downloaded_excel_path, args)
