@@ -288,7 +288,7 @@ _CONFIG_SCHEMA: Dict[str, Any] = {
     "type": dict,
     "allow_extra": False,
     "fields": {
-        "provider": {"type": str, "choices": ["minimax", "deepseek", "opencode", "qwen"]},
+        "provider": {"type": str, "choices": ["minimax", "deepseek", "opencode", "qwen", "opencode_deepseek"]},
         "fallback_providers": {"type": list, "item_type": {"type": str}},
         "providers": {
             "type": dict,

@@ -84,6 +84,42 @@ def build_prompt(excel_text: str, config: Dict[str, Any]) -> str:
     )
 
 
+def build_revision_messages(report_text: str, feedback: str, config: Dict[str, Any],
+                            excel_text: str = "") -> List[Dict[str, str]]:
+    """构建「根据审核人反馈修订周报」的多轮对话消息。
+
+    通过多轮上下文让模型在保留原始内容的基础上按反馈修订：
+    首条用户消息复用初次生成周报的提示词（含原始 Excel 数据与格式要求），
+    避免重复携带大段原始数据，同时让模型可依据反馈核对/补充原始数据。
+
+    Args:
+        report_text: 当前待修订的周报文本
+        feedback: 审核人反馈意见
+        config: 全局配置（用于获取输出格式）
+        excel_text: 原始 Excel 工作数据汇总（可选）
+
+    Returns:
+        多轮对话消息列表 [{role, content}, ...]
+    """
+    messages: List[Dict[str, str]] = []
+    if excel_text:
+        messages.append({"role": "user", "content": build_prompt(excel_text, config)})
+    messages.append({"role": "assistant", "content": report_text})
+    messages.append({
+        "role": "user",
+        "content": (
+            "请根据以下审核人反馈意见，对上面这份周报进行修订，输出完整的新版周报：\n\n"
+            f"【审核人反馈】\n{feedback}\n\n"
+            "要求：\n"
+            "1. 严格遵循反馈意见逐条修订，不要遗漏\n"
+            "2. 保留周报中正确、有价值的内容与整体结构\n"
+            "3. 直接输出完整周报正文，不要对话式前缀、不要解释修订过程\n"
+            "4. 输出格式与修订前保持一致"
+        ),
+    })
+    return messages
+
+
 # ============ call_llm_api 的职责拆分子函数 ============
 
 def _validate_provider_config(config: Dict[str, Any], provider_name: str = None) -> Tuple[str, Dict[str, Any]]:
