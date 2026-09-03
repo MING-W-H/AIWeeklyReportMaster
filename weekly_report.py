@@ -6,11 +6,12 @@ AI 周报生成器 - 多 LLM Provider 支持（MiniMax / DeepSeek / OpenCode / Q
 提取 B(任务名称)/D(项目/需求)/H(工作描述) 三列内容，单文件内去重后交由 AI 总结整理，
 返回一段可设置格式的周报文本，经钉钉人工审核后通过钉钉和腾讯企业邮箱发送。
 
-支持四种 AI Provider（均使用 OpenAI 兼容接口）：
+支持五种 AI Provider（均使用 OpenAI 兼容接口）：
     - minimax : MiniMax M3 模型 (https://api.minimaxi.com/v1/chat/completions)
     - deepseek: DeepSeek V4 模型 (https://api.deepseek.com/chat/completions)
     - opencode: OpenCode Zen 网关 (https://opencode.ai/zen/v1/chat/completions)
     - qwen    : 通义千问 Qwen 3.8 Max (https://dashscope.aliyuncs.com/compatible-mode/v1)
+    - volc_glm: 火山方舟托管的 GLM-5.3 (https://ark.cn-beijing.volces.com/api/v3)
 
 使用方式：
     1. 首次运行会自动生成 config.json 模板，请填入对应 provider 的 API Key
@@ -135,7 +136,7 @@ def _pid_alive(pid: int) -> bool:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="AI 周报生成器 (多 LLM Provider 支持)")
     parser.add_argument("--provider", choices=list(PROVIDER_PRESETS.keys()),
-                        help="选择 AI provider: minimax | deepseek | opencode | qwen")
+                        help="选择 AI provider: minimax | deepseek | opencode | qwen | volc_glm")
     parser.add_argument("--model", help="覆盖 provider 的 model 名称")
     parser.add_argument("--format", choices=list(FORMAT_TEMPLATES.keys()) + ["custom"],
                         help="覆盖 config.json 中的 output_format")
