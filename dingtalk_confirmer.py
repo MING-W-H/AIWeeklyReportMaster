@@ -49,6 +49,7 @@ _SEND_GROUP_URL = "https://api.dingtalk.com/v1.0/robot/groupMessages/send"
 _GET_USER_BY_MOBILE_URL = "https://oapi.dingtalk.com/topapi/v2/user/getbymobile"
 _LIST_DEPT_URL = "https://oapi.dingtalk.com/topapi/v2/department/listsub"
 _LIST_USER_URL = "https://oapi.dingtalk.com/topapi/v2/user/list"
+_GET_USER_URL = "https://oapi.dingtalk.com/topapi/v2/user/get"
 
 DEFAULT_CONFIRM_KEYWORDS = ["发送", "send", "确认", "ok"]
 DEFAULT_CANCEL_KEYWORDS = ["取消", "cancel", "放弃", "不发送"]
@@ -220,6 +221,46 @@ def list_dept_members(config: Dict[str, Any], dept_id: int = 1) -> List[Dict[str
             break
         cursor = result.get("next_cursor", 0)
     return members
+
+
+def resolve_user_names(config: Dict[str, Any], user_ids: List[str]) -> Dict[str, str]:
+    """批量查询用户姓名（尽力查询，权限不足时回退为 userId 本身）。
+
+    Args:
+        config: 全局配置字典（用于获取钉钉凭证）
+        user_ids: 用户 ID 列表
+
+    Returns:
+        {userId: 姓名} 字典，查询失败的 userId 对应值为空字符串。
+        传入空列表时直接返回空字典，不发起任何 API 请求。
+    """
+    if not user_ids:
+        return {}
+
+    dt_cfg = config.get("dingtalk", {})
+    app_key, app_secret = get_credentials(dt_cfg)
+    token = get_oapi_access_token(app_key, app_secret)
+
+    names: Dict[str, str] = {}
+    for uid in user_ids:
+        try:
+            resp = retry_request(
+                requests.post,
+                _GET_USER_URL,
+                params={"access_token": token},
+                json={"userid": uid},
+                timeout=15,
+                max_retries=1,
+                base_delay=1.0,
+                backoff=2.0,
+                func_name="钉钉用户信息查询",
+            )
+            data = resp.json()
+            if data.get("errcode") == 0:
+                names[uid] = (data.get("result") or {}).get("name", "") or ""
+        except Exception:
+            pass
+    return names
 
 
 def send_markdown_oto(app_key: str, app_secret: str, user_ids: List[str],

@@ -60,6 +60,13 @@ PROVIDER_PRESETS: Dict[str, Dict[str, Any]] = {
         "thinking_param": None,                                   # Qwen 暂不支持 thinking 参数
         "max_tokens_field": "max_tokens",
     },
+    "volc_glm": {
+        "api_key": "",                                            # 填入火山方舟 Ark API Key (ark- 开头)
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+        "model": "glm-5.3",                                       # 智谱 GLM-5.3（火山方舟托管的模型 ID/推理接入点）
+        "thinking_param": None,                                   # GLM 不支持 thinking 参数
+        "max_tokens_field": "max_tokens",
+    },
 }
 
 # ============ 默认配置（首次运行会写入 config.json） ============
@@ -246,12 +253,13 @@ def _apply_env_overrides(config: Dict[str, Any]) -> None:
 
     优先级：环境变量 > config.json。敏感信息（密码/凭证）建议用环境变量注入。
     """
-    # 各 provider 的 API Key: MINIMAX_API_KEY / DEEPSEEK_API_KEY / OPENCODE_API_KEY / QWEN_API_KEY
+    # 各 provider 的 API Key: MINIMAX_API_KEY / DEEPSEEK_API_KEY / OPENCODE_API_KEY / QWEN_API_KEY / VOLC_GLM_API_KEY
     env_key_map = {
         "minimax": "MINIMAX_API_KEY",
         "deepseek": "DEEPSEEK_API_KEY",
         "opencode": "OPENCODE_API_KEY",
         "qwen": "QWEN_API_KEY",
+        "volc_glm": "VOLC_GLM_API_KEY",
     }
     for prov_name, env_var in env_key_map.items():
         env_val = os.getenv(env_var)
@@ -288,7 +296,7 @@ _CONFIG_SCHEMA: Dict[str, Any] = {
     "type": dict,
     "allow_extra": False,
     "fields": {
-        "provider": {"type": str, "choices": ["minimax", "deepseek", "opencode", "qwen", "opencode_deepseek"]},
+        "provider": {"type": str, "choices": ["minimax", "deepseek", "opencode", "qwen", "opencode_deepseek", "volc_glm"]},
         "fallback_providers": {"type": list, "item_type": {"type": str}},
         "providers": {
             "type": dict,
@@ -535,8 +543,8 @@ def validate_required_config(config: Dict[str, Any]) -> List[str]:
     if not configured:
         errors.append(
             "未配置任何 AI provider 的 api_key。"
-            "请在 config.json 的 providers.{minimax|deepseek|opencode|qwen}.api_key 中填写，"
-            "或设置环境变量（MINIMAX_API_KEY / DEEPSEEK_API_KEY / OPENCODE_API_KEY / QWEN_API_KEY）"
+            "请在 config.json 的 providers.{minimax|deepseek|opencode|qwen|volc_glm}.api_key 中填写，"
+            "或设置环境变量（MINIMAX_API_KEY / DEEPSEEK_API_KEY / OPENCODE_API_KEY / QWEN_API_KEY / VOLC_GLM_API_KEY）"
         )
 
     # 2. CRM：启用时需能拿到 token（直接配置/环境变量，或具备自动登录刷新能力）

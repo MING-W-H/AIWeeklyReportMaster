@@ -56,7 +56,12 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
 import requests
 
 from config_manager import load_config
-from dingtalk_confirmer import get_credentials, get_oapi_access_token, list_dept_members
+from dingtalk_confirmer import (
+    get_credentials,
+    get_oapi_access_token,
+    list_dept_members,
+    resolve_user_names,
+)
 from logger import get_logger
 from retry_utils import retry_request
 
@@ -64,7 +69,6 @@ logger = get_logger(__name__)
 
 # ============ 钉钉开放平台接口 ============
 _GETSIMPLE_LIST_URL = "https://oapi.dingtalk.com/attendance/list"
-_GET_USER_URL = "https://oapi.dingtalk.com/topapi/v2/user/get"
 
 # 单次接口最多查询 7 天（含首尾）
 _MAX_DAYS_PER_REQUEST = 7
@@ -98,31 +102,6 @@ SOURCE_TYPE_MAP = {
     "BEACON": "Beacon",
     "DING_ATM": "钉钉考勤机",
 }
-# ============ 用户解析 ============
-def _resolve_names(token: str, user_ids: List[str]) -> Dict[str, str]:
-    """尽力把 userId 解析为姓名（权限不足时回退为 userId）。"""
-    names: Dict[str, str] = {}
-    for uid in user_ids:
-        try:
-            resp = retry_request(
-                requests.post,
-                _GET_USER_URL,
-                params={"access_token": token},
-                json={"userid": uid},
-                timeout=15,
-                max_retries=1,
-                base_delay=1.0,
-                backoff=2.0,
-                func_name="钉钉用户信息查询",
-            )
-            data = resp.json()
-            if data.get("errcode") == 0:
-                names[uid] = (data.get("result") or {}).get("name", "") or ""
-        except Exception:
-            pass
-    return names
-
-
 # ============ 考勤查询 ============
 def _chunk_date_ranges(start: datetime, end: datetime,
                        chunk_days: int = _MAX_DAYS_PER_REQUEST
@@ -433,7 +412,7 @@ def main() -> int:
         if len(user_ids) > _MAX_USERS_PER_REQUEST:
             logger.error("单次最多查询 %d 人", _MAX_USERS_PER_REQUEST)
             return 1
-        names = _resolve_names(token, user_ids)
+        names = resolve_user_names(config, user_ids)
         found = [u for u in user_ids if names.get(u)]
         if found:
             logger.info("已解析 %d/%d 个 userId 的姓名", len(found), len(user_ids))
@@ -455,7 +434,7 @@ def main() -> int:
             logger.error("未指定用户：请使用 --userids 或 --dept，"
                          "或在 config.json 的 attendance.user_ids 中配置")
             return 1
-        names = _resolve_names(token, user_ids)
+        names = resolve_user_names(config, user_ids)
         logger.info("使用 config.json attendance.user_ids 名单，共 %d 人", len(user_ids))
 
     # 查询考勤

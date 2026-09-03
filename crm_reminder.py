@@ -40,50 +40,18 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
     except Exception:
         pass
 
-import requests
-
 from config_manager import load_config, render_notification
 from dingtalk_confirmer import (
     get_credentials,
-    get_oapi_access_token,
+    resolve_user_names,
     send_markdown_group,
 )
 from holiday_checker import is_holiday
 from logger import get_logger
-from retry_utils import retry_request
 
 logger = get_logger(__name__)
 
-_GET_USER_URL = "https://oapi.dingtalk.com/topapi/v2/user/get"
-
 _WEEKDAY_CN = "一二三四五六日"
-
-
-def _resolve_names(app_key: str, app_secret: str, user_ids) -> dict:
-    """尽力把 userId 解析为姓名（权限不足时回退为 userId 本身）。"""
-    if not user_ids:
-        return {}
-    token = get_oapi_access_token(app_key, app_secret)
-    names = {}
-    for uid in user_ids:
-        try:
-            resp = retry_request(
-                requests.post,
-                _GET_USER_URL,
-                params={"access_token": token},
-                json={"userid": uid},
-                timeout=15,
-                max_retries=1,
-                base_delay=1.0,
-                backoff=2.0,
-                func_name="钉钉用户信息查询",
-            )
-            data = resp.json()
-            if data.get("errcode") == 0:
-                names[uid] = (data.get("result") or {}).get("name", "") or ""
-        except Exception:
-            pass
-    return names
 
 
 def main() -> int:
@@ -131,7 +99,7 @@ def main() -> int:
 
     # ---- @ 名单 ----
     remind_ids = [str(s).strip() for s in (rm_cfg.get("remind_user_ids") or []) if str(s).strip()]
-    names_map = _resolve_names(app_key, app_secret, remind_ids)
+    names_map = resolve_user_names(config, remind_ids)
     at_text = " ".join(f"@{names_map.get(uid) or uid}" for uid in remind_ids)
 
     # ---- 渲染消息 ----

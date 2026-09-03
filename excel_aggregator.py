@@ -4,7 +4,8 @@
 负责：
 - 处理 CRM 下载的单个 Excel 文件（不再扫描目录、不做跨文件合并）
 - 从该 Excel 中提取 B 列「任务名称」、D 列「项目/需求」、H 列「工作描述」
-- 将三列内容按行合并为一条记录，单文件内去重
+  以及 F 列「开始时间」、G 列「结束时间」、I 列「实际工时」
+- 将各列内容按行合并为一条记录，单文件内去重
 - 输出编号列表格式的汇总文本
 
 适配 CRM 下载的 Excel 列结构：
@@ -20,6 +21,7 @@
     ...
 """
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -40,6 +42,14 @@ TARGET_COLUMNS: List[Tuple[str, str]] = [
     ("D", "项目/需求"),
     ("H", "工作描述"),
 ]
+
+# 时间与工时列：仅通过表头关键词匹配（按顺序优先），匹配失败不兜底列字母，
+# 避免列位置被其他列占用时误取（如测试用无时间列的表）。
+TIME_COLUMN_KEYWORDS: Dict[str, List[str]] = {
+    "开始时间": ["开始", "start"],
+    "结束时间": ["结束", "end"],
+    "实际工时": ["实际工时", "actualhours", "工时"],
+}
 
 # 跳过的汇总行关键词
 SUMMARY_KEYWORDS = ("总计", "合计", "小计", "汇总")
@@ -100,6 +110,9 @@ def _resolve_columns_by_header(df: "pd.DataFrame") -> Dict[str, Optional[str]]:
     若所有目标列都匹配成功，返回表头匹配结果；
     否则对有匹配失败的列回退到列字母兜底。
 
+    时间与工时列（开始时间/结束时间/实际工时）仅按表头关键词匹配，
+    匹配失败时不兜底列字母（避免列位置被其他列占用时误取）。
+
     Returns:
         {目标表头: 列名或 None}
     """
@@ -120,6 +133,19 @@ def _resolve_columns_by_header(df: "pd.DataFrame") -> Dict[str, Optional[str]]:
             result[target] = _resolve_column_by_letter(df, fallback_letter)
             if result[target]:
                 logger.debug("表头「%s」未匹配，回退到列字母 %s", target, fallback_letter)
+
+    # 时间与工时列：仅按表头关键词匹配（关键词顺序优先），无匹配则为 None
+    for label, keywords in TIME_COLUMN_KEYWORDS.items():
+        result[label] = None
+        for kw in keywords:
+            for col_name in col_names:
+                if kw in col_name:
+                    result[label] = col_name
+                    break
+            if result[label]:
+                break
+        if result[label]:
+            logger.debug("时间/工时列「%s」匹配到列名: %s", label, result[label])
     return result
 
 
@@ -130,6 +156,28 @@ def _clean_cell(value: Any) -> str:
     text = str(value).strip()
     # 压缩内部多余换行和空白，便于去重和 AI 阅读
     text = os.linesep.join(line.strip() for line in text.splitlines() if line.strip())
+    return text
+
+
+def _clean_time_value(value: Any) -> str:
+    """清理时间单元格：datetime 转 'YYYY-MM-DD'，去掉时分秒部分。"""
+    text = _clean_cell(value)
+    if not text:
+        return ""
+    # datetime / date 值 str() 形如 '2026-08-24 00:00:00'，统一截取日期
+    m = re.match(r"^(\d{4}-\d{2}-\d{2}).*$", text)
+    if m:
+        return m.group(1)
+    return text
+
+
+def _clean_hours_value(value: Any) -> str:
+    """清理工时值：数字 5.0 / 5.5 归一化，去掉无意义的小数 .0。"""
+    text = _clean_cell(value)
+    if not text:
+        return ""
+    if re.fullmatch(r"\d+\.0", text):
+        return text[:-2]
     return text
 
 
@@ -152,10 +200,12 @@ def _is_invalid_row(task_name: str, project: str, description: str) -> bool:
 
 def collect_tasks_from_excel(file_path: Path,
                              max_chars_per_sheet: Optional[int] = None) -> List[str]:
-    """从单个 Excel 文件中提取 B/D/H 三列并按行合并为记录列表。
+    """从单个 Excel 文件中提取 B/D/H 三列及 F/G/I 时间、工时列并按行合并为记录列表。
 
-    每行合并格式：「任务名称 | 项目/需求 | 工作描述」
-    - 若某列为空则跳过该部分
+    每行合并格式：
+        「任务名称 | 项目/需求 | 工作描述 | 开始时间：YYYY-MM-DD | 结束时间：YYYY-MM-DD | 实际工时：N」
+    - 空列跳过该部分
+    - 时间列清洗为日期（去掉时分秒），工时候选值去掉无意义的小数 .0
     - 自动跳过表头、空值、汇总行、纯序号行
     - 保留原始顺序
     - max_chars_per_sheet 为正数时，单个 Sheet 汇总文本达到该上限后停止追加（防止超 token）
@@ -191,6 +241,9 @@ def collect_tasks_from_excel(file_path: Path,
         col_b = resolved.get("任务名称")  # 任务名称
         col_d = resolved.get("项目/需求")  # 项目/需求
         col_h = resolved.get("工作描述")  # 工作描述
+        col_start = resolved.get("开始时间")  # F 列开始时间
+        col_end = resolved.get("结束时间")  # G 列结束时间
+        col_hours = resolved.get("实际工时")  # I 列实际工时
 
         if col_b is None:
             logger.warning("%s Sheet '%s' 列数不足，无法定位 B 列", file_path.name, sheet_name)
@@ -199,6 +252,9 @@ def collect_tasks_from_excel(file_path: Path,
         series_b = df[col_b]
         series_d = df[col_d] if col_d else None
         series_h = df[col_h] if col_h else None
+        series_start = df[col_start] if col_start else None
+        series_end = df[col_end] if col_end else None
+        series_hours = df[col_hours] if col_hours else None
 
         sheet_chars = 0
         for i in range(len(df)):
@@ -209,7 +265,11 @@ def collect_tasks_from_excel(file_path: Path,
             if _is_invalid_row(task_name, project, description):
                 continue
 
-            # 合并三列为一条记录，空列跳过
+            start_time = _clean_time_value(series_start.iloc[i]) if series_start is not None else ""
+            end_time = _clean_time_value(series_end.iloc[i]) if series_end is not None else ""
+            hours = _clean_hours_value(series_hours.iloc[i]) if series_hours is not None else ""
+
+            # 合并各列为一条记录，空列跳过
             parts: List[str] = []
             if task_name:
                 parts.append(task_name)
@@ -217,6 +277,12 @@ def collect_tasks_from_excel(file_path: Path,
                 parts.append(f"项目：{project}")
             if description:
                 parts.append(f"描述：{description}")
+            if start_time:
+                parts.append(f"开始时间：{start_time}")
+            if end_time:
+                parts.append(f"结束时间：{end_time}")
+            if hours:
+                parts.append(f"实际工时：{hours}")
             if not parts:
                 continue
             record = " | ".join(parts)
@@ -234,7 +300,7 @@ def collect_tasks_from_excel(file_path: Path,
 
 def aggregate_excel_content(config: Dict[str, Any],
                             excel_file: Optional[Path] = None) -> str:
-    """汇总单个 Excel 文件的 B/D/H 三列内容（不做跨文件合并）。
+    """汇总单个 Excel 文件的 B/D/H 三列及 F/G/I 时间、工时列内容（不做跨文件合并）。
 
     Args:
         config: 全局配置字典
@@ -243,7 +309,8 @@ def aggregate_excel_content(config: Dict[str, Any],
             取最新修改的一个 Excel 文件。
 
     流程：
-        Python 读取该 Excel → 提取 B(任务名称)/D(项目/需求)/H(工作描述) 三列
+        Python 读取该 Excel → 提取 B(任务名称)/D(项目/需求)/H(工作描述)
+        及 F(开始时间)/G(结束时间)/I(实际工时)
         → 按行合并 → 单文件内去重 → 交由 AI 优化。
     """
     # 优先使用传入的单个文件（CRM 下载结果）；否则从目录取最新文件兜底
@@ -278,7 +345,10 @@ def aggregate_excel_content(config: Dict[str, Any],
     # 注意：以下过程性元信息仅用于 Python 端控制台日志，不写入汇总文本
     # 以免 AI 在周报中引用"来源文件数/条目数/去重后条目数"等数据汇总过程信息
     lines: List[str] = []
-    lines.append("以下为本 Excel 中 B 列任务名称、D 列项目/需求、H 列工作描述的去重汇总列表：")
+    lines.append(
+        "以下为本 Excel 中 B 列任务名称、D 列项目/需求、H 列工作描述"
+        "及 F/G/I 列开始/结束时间、实际工时的去重汇总列表："
+    )
     lines.append("")
     for idx, task in enumerate(unique_tasks, start=1):
         lines.append(f"{idx}. {task}")

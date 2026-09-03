@@ -123,6 +123,42 @@ def test_collect_tasks_from_excel_letter_fallback(tmp_path):
     ]
 
 
+def test_collect_tasks_from_excel_time_columns(tmp_path):
+    """F/G/I 列（开始时间/结束时间/实际工时）按表头匹配并合并进记录。"""
+    df = pd.DataFrame({
+        "序号": [1, 2],
+        "任务名称": ["任务A", "任务B"],
+        "所属商机": ["商机1", "商机2"],
+        "项目/需求": ["项目X", "项目Y"],
+        "合同号": ["HT-1", "HT-2"],
+        "开始时间": ["2026-08-24", "2026-08-25"],
+        "结束时间": ["2026-08-28", "2026-08-29"],
+        "工作描述": ["开发接口", "修复缺陷"],
+        "实际工时": [5, 3.5],
+    })
+    path = _make_excel(tmp_path / "time.xlsx", df)
+    records = collect_tasks_from_excel(path)
+    assert records == [
+        "任务A | 项目：项目X | 描述：开发接口 | 开始时间：2026-08-24 | 结束时间：2026-08-28 | 实际工时：5",
+        "任务B | 项目：项目Y | 描述：修复缺陷 | 开始时间：2026-08-25 | 结束时间：2026-08-29 | 实际工时：3.5",
+    ]
+
+
+def test_collect_tasks_from_excel_skips_time_columns_when_absent(tmp_path):
+    """没有时间/工时列的表头时，F/G/I 不按列字母兜底，避免误取其他列。"""
+    df = pd.DataFrame({
+        "序号": [1],
+        "任务名称": ["任务A"],
+        "所属商机": ["商机1"],
+        "项目/需求": ["项目X"],
+        "合同号": ["HT-1"],
+        "工作描述": ["开发"],   # 位于 F 列位置，但表头不是时间，不应被当开始时间
+    })
+    path = _make_excel(tmp_path / "no_time.xlsx", df)
+    records = collect_tasks_from_excel(path)
+    assert records == ["任务A | 项目：项目X | 描述：开发"]
+
+
 def test_collect_tasks_from_excel_max_chars(tmp_path):
     """超过 max_chars_per_sheet 后停止追加该 Sheet 剩余行。"""
     path = _make_excel(tmp_path / "tasks.xlsx", _sample_df())
@@ -147,7 +183,8 @@ def test_aggregate_excel_content_dedup_and_numbered(tmp_path):
     path = _make_excel(tmp_path / "tasks.xlsx", _sample_df())
     result = aggregate_excel_content(config, excel_file=path)
     assert result == (
-        "以下为本 Excel 中 B 列任务名称、D 列项目/需求、H 列工作描述的去重汇总列表：\n"
+        "以下为本 Excel 中 B 列任务名称、D 列项目/需求、H 列工作描述"
+        "及 F/G/I 列开始/结束时间、实际工时的去重汇总列表：\n"
         "\n"
         "1. 任务A | 项目：项目X | 描述：开发接口\n"
         "2. 任务B | 项目：项目Y | 描述：修复缺陷"
