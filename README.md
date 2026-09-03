@@ -33,8 +33,8 @@
 
 - **CRM 接口自动下载**：调用 CRM `exportWorkHourItems` 接口自动下载上一周工时 Excel，无需手动放置
 - **本地 Excel 兼容**：未启用 CRM 接口时仍支持将单个 Excel 文件放置到 `excel_files/` 目录（取最新修改的一个文件）
-- **智能列识别**：自动识别 Excel 中的任务列（B 列任务名称 / D 列项目/需求 / H 列工作描述），适配 CRM 下载格式
-- **单文件去重**：提取 B/D/H 三列内容，单文件内自动去重
+- **智能列识别**：自动识别 Excel 中的任务列（B 列任务名称 / D 列项目/需求 / H 列工作描述 / F 开始时间 / G 结束时间 / I 实际工时），适配 CRM 下载格式
+- **单文件去重**：提取 B/D/H 三列及 F/G/I 时间、工时列内容，单文件内自动去重
 - **多 AI Provider 支持**：内置 4 家大模型 API（MiniMax / DeepSeek / OpenCode / Qwen），可自由切换
 - **多种输出格式**：支持 Markdown / 纯文本 / 结构化 / 项目符号 / 自定义提示词
 - **智能输出清理**：自动移除 AI 输出中的对话式前缀、思考过程泄露、重复输出
@@ -174,7 +174,7 @@ python weekly_report.py
 
 将工时表 Excel 文件放入 `excel_files/` 文件夹（或其他你配置的路径）。程序会**只处理最新修改的一个文件**，不做多文件拆分合并。
 
-Excel 文件应包含 B 列「任务名称」、D 列「项目/需求」、H 列「工作描述」（CRM 下载格式，自动识别）
+Excel 文件应包含 B 列「任务名称」、D 列「项目/需求」、H 列「工作描述」，可选 F 列「开始时间」、G 列「结束时间」、I 列「实际工时」（CRM 下载格式，自动识别）
 
 ### 5. 生成周报
 
@@ -1266,7 +1266,7 @@ register_weekly.ps1 (定时任务注册)
 | [weekly_report.py](weekly_report.py)           | 主入口、命令行参数、流程编排                      | `main()`, `parse_args()`                                 |
 | [config_manager.py](config_manager.py)         | 配置定义、加载、合并、环境变量、启动关键配置校验    | `load_config()`, `validate_required_config()`   |
 | [crm_downloader.py](crm_downloader.py)         | CRM 工时 Excel 接口下载、日期范围计算、文件名解码、token 加密落盘 | `download_workhour_excel()`, `encrypt_secret()`, `decrypt_secret()` |
-| [excel_aggregator.py](excel_aggregator.py)     | 单个 Excel 文件列识别（B/D/H）、单文件内去重    | `aggregate_excel_content()`                                |
+| [excel_aggregator.py](excel_aggregator.py)     | 单个 Excel 文件列识别（B/D/H + F/G/I 时间工时）、单文件内去重    | `aggregate_excel_content()`                                |
 | [holiday_checker.py](holiday_checker.py)       | 节假日检查（法定假日 + 调休 + 在线 API）          | `is_holiday()`, `should_skip_execution()`                |
 | [llm_client.py](llm_client.py)                 | LLM API 调用、prompt 构建、错误处理               | `call_llm_api()`, `build_prompt()`                       |
 | [text_utils.py](text_utils.py)                 | 对话前缀清理、Markdown 转 HTML                    | `strip_chat_prefix()`, `markdown_to_html()`              |
@@ -1302,7 +1302,7 @@ register_weekly.ps1 (定时任务注册)
 ├─────────────────────────────────────────────────────────────┤
 │  Step 3: Python 汇总单个 Excel 为文本                         │
 │  ├─ 读取该 Excel 的所有 sheet                                 │
-│  ├─ 按列字母提取 B(任务名称) / D(项目/需求) / H(工作描述)     │
+│  ├─ 提取 B(任务名称) / D(项目/需求) / H(工作描述) 及 F/G/I 开始/结束时间、实际工时 │
 │  ├─ 跳过表头、空值、纯数字序号、"总计/合计"行                  │
 │  ├─ 单文件内去重（保留首次出现顺序）                           │
 │  └─ 拼接为编号列表格式的文本                                   │
