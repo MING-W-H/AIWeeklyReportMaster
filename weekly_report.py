@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-AI 周报生成器 - 多 LLM Provider 支持（MiniMax / DeepSeek / OpenCode / Qwen）
+AI 周报生成器 - 多 LLM Provider 支持（MiniMax / DeepSeek / OpenCode / Qwen / 火山方舟GLM）
 
 处理 CRM 下载的单个工时 Excel（或本地 excel_folder 目录中最新修改的一个文件），
 提取 B(任务名称)/D(项目/需求)/H(工作描述) 三列内容，单文件内去重后交由 AI 总结整理，
@@ -249,55 +249,34 @@ def download_crm_if_enabled(
 def generate_report_via_llm(
     prompt: str, config: dict, debug: bool
 ) -> tuple[Optional[str], Optional[int]]:
-    """调用 LLM API 生成周报（支持 provider 自动降级）
+    """调用 LLM API 生成周报（provider 降级由 call_llm_api 按 fallback_providers 处理）
 
     Returns:
         (report_text, error_code): 成功返回周报文本和 None，失败返回 None 和错误码
     """
-    providers = config.get("providers", {})
-    current_provider = config["provider"]
-    # 构建降级顺序：当前 provider 优先，其余已配置 api_key 的 provider 按序
-    fallback_order = [current_provider] + [
-        p for p in providers
-        if p != current_provider and providers[p].get("api_key", "").strip()
-    ]
-    report_text = None
-    last_error = None
-    for idx, provider_name in enumerate(fallback_order):
-        try:
-            config["provider"] = provider_name
-            report_text = call_llm_api(prompt, config)
-            break  # 成功后跳出
-        except ValueError as e:
-            # 配置类错误（如 api_key 缺失、provider 未知）
-            logger.error("%s 配置错误: %s", provider_name, e)
-            if idx < len(fallback_order) - 1:
-                logger.info("尝试切换到下一个 provider: %s", fallback_order[idx + 1])
-                continue
-            # 最后一个 provider 也配置错误
-            return None, ErrorCode.LLM_ERROR
-        except RuntimeError as e:
-            logger.warning("%s 调用失败: %s", provider_name, e)
-            last_error = e
-            if idx < len(fallback_order) - 1:
-                logger.info("尝试切换到下一个 provider: %s", fallback_order[idx + 1])
-                continue
-            break  # 所有 provider 都失败
-        except Exception as e:
-            logger.error("%s 未知异常: %s", provider_name, e)
-            last_error = e
-            if idx < len(fallback_order) - 1:
-                continue
-            break
-
-    if report_text is None:
-        logger.error("所有 provider 均失败，无法生成周报")
-        error_msg = str(last_error or "未知错误")
-        logger.error("最后一次错误: %s", error_msg)
-        # 自动发送失败告警
-        send_failure_alert(config, f"AI 接口调用失败: {error_msg}")
+    try:
+        report_text = call_llm_api(prompt, config)
+    except ValueError as e:
+        # 配置类错误（如 api_key 缺失、provider 未知）
+        logger.error("LLM 配置错误: %s", e)
         if debug:
             logger.debug("LLM 调用异常堆栈:", exc_info=True)
+        return None, ErrorCode.LLM_ERROR
+    except RuntimeError as e:
+        logger.error("所有 provider 均失败，无法生成周报: %s", e)
+        send_failure_alert(config, f"AI 接口调用失败: {e}")
+        if debug:
+            logger.debug("LLM 调用异常堆栈:", exc_info=True)
+        return None, ErrorCode.LLM_ERROR
+    except Exception as e:
+        logger.error("LLM 调用未知异常: %s", e)
+        send_failure_alert(config, f"AI 接口调用失败: {e}")
+        if debug:
+            logger.debug("LLM 调用异常堆栈:", exc_info=True)
+        return None, ErrorCode.LLM_ERROR
+
+    if not report_text.strip():
+        logger.error("模型返回内容为空，无法生成周报")
         return None, ErrorCode.LLM_ERROR
 
     return report_text, None

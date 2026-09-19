@@ -30,7 +30,7 @@ except ImportError:
 
 
 # ============ Provider 默认配置 ============
-# 四家均为 OpenAI 兼容协议，仅 base_url / model / 默认参数不同
+# 五家均为 OpenAI 兼容协议，仅 base_url / model / 默认参数不同
 PROVIDER_PRESETS: Dict[str, Dict[str, Any]] = {
     "minimax": {
         "api_key": "",                                            # 填入 MiniMax API Key
@@ -71,7 +71,7 @@ PROVIDER_PRESETS: Dict[str, Dict[str, Any]] = {
 
 # ============ 默认配置（首次运行会写入 config.json） ============
 DEFAULT_CONFIG: Dict[str, Any] = {
-    "provider": "minimax",                           # 当前使用的 provider: minimax | deepseek | opencode | qwen
+    "provider": "minimax",                           # 当前使用的 provider: minimax | deepseek | opencode | qwen | volc_glm（或 providers 中的自定义 provider）
     "fallback_providers": [],                        # 备用 provider 列表，主 provider 失败时依次降级（如 ["deepseek", "qwen"]）
     "providers": PROVIDER_PRESETS,                   # 多 provider 配置（可自由修改 base_url/model）
     "excel_folder": "./excel_files",                 # Excel 文件所在文件夹（绝对路径或相对路径）
@@ -216,7 +216,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 CONFIG_PATH = Path(__file__).parent / "config.json"
 
 # 需要合并默认值的配置段列表（新增配置段时在此追加）
-_SECTIONS_TO_MERGE = ("email", "crm", "dingtalk", "attendance", "crm_reminder", "chatbot")
+_SECTIONS_TO_MERGE = ("email", "crm", "dingtalk", "attendance", "crm_reminder", "chatbot",
+                      "contact_info", "notification", "retry")
 
 
 def _merge_config_section(config: Dict[str, Any], section_name: str) -> None:
@@ -233,7 +234,7 @@ def _merge_config_section(config: Dict[str, Any], section_name: str) -> None:
 
 
 def _merge_providers_config(config: Dict[str, Any]) -> None:
-    """合并 providers 配置：确保四个 provider 都存在且字段完整。"""
+    """合并 providers 配置：确保全部内置 provider 都存在且字段完整。"""
     for prov_name, preset in PROVIDER_PRESETS.items():
         config["providers"].setdefault(prov_name, copy.deepcopy(preset))
         # 补齐新增字段（如 thinking_param / max_tokens_field）
@@ -296,7 +297,8 @@ _CONFIG_SCHEMA: Dict[str, Any] = {
     "type": dict,
     "allow_extra": False,
     "fields": {
-        "provider": {"type": str, "choices": ["minimax", "deepseek", "opencode", "qwen", "opencode_deepseek", "volc_glm"]},
+        # provider 不用静态 choices：允许 providers 中自定义的 provider（跨字段校验见 validate_config）
+        "provider": {"type": str},
         "fallback_providers": {"type": list, "item_type": {"type": str}},
         "providers": {
             "type": dict,
@@ -526,6 +528,19 @@ def validate_config(config: Dict[str, Any]) -> List[str]:
     """按 _CONFIG_SCHEMA 校验配置字典，返回错误信息列表（空列表 = 校验通过）。"""
     errors: List[str] = []
     _validate_value(config, _CONFIG_SCHEMA, "config", errors)
+
+    # 跨字段校验：provider / fallback_providers 必须是内置预设或 providers 中已配置的项
+    known_providers = set(PROVIDER_PRESETS) | set(config.get("providers") or {})
+    provider = config.get("provider")
+    if isinstance(provider, str) and provider not in known_providers:
+        allowed = " / ".join(sorted(known_providers))
+        errors.append(f"config.provider 取值非法：期望 {allowed}，当前值: {provider!r}")
+    for i, name in enumerate(config.get("fallback_providers") or []):
+        if isinstance(name, str) and name not in known_providers:
+            errors.append(
+                f"config.fallback_providers[{i}] 取值非法：{name!r} 不在 providers 配置中"
+                f"（可选: {' / '.join(sorted(known_providers))}）"
+            )
     return errors
 
 
@@ -602,29 +617,28 @@ def load_config() -> Dict[str, Any]:
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         config = json.load(f)
 
-    # 合并顶层默认值（兼容旧 config 缺字段的情况）
-    for k, v in DEFAULT_CONFIG.items():
-        if k not in config:
-            config[k] = copy.deepcopy(v)
-
-    # 合并嵌套配置段默认值（兼容旧版配置升级）
-    _merge_providers_config(config)
-    for section in _SECTIONS_TO_MERGE:
-        _merge_config_section(config, section)
-    config.setdefault("contact_info", DEFAULT_CONFIG.get("contact_info", {}))
-    config.setdefault("notification", DEFAULT_CONFIG.get("notification", {}))
-    _merge_notification_templates(config)
-    config.setdefault("retry", DEFAULT_CONFIG.get("retry", {}))
-
-    # 环境变量覆盖（优先级最高）
-    _apply_env_overrides(config)
-
-    # Schema 校验：尽早暴露字段名拼写错误与类型错误
+    # Schema 校验先于默认值合并：若某配置段类型写错（如 "email": 123），
+    # 此处能给出清晰的校验错误，而不是在下方合并阶段抛 AttributeError
     errors = validate_config(config)
     if errors:
         raise ValueError(
             "config.json 校验失败，请修正以下问题：\n  - " + "\n  - ".join(errors)
         )
+
+    # 合并顶层默认值（兼容旧 config 缺字段的情况）
+    for k, v in DEFAULT_CONFIG.items():
+        if k not in config:
+            config[k] = copy.deepcopy(v)
+
+    # 合并嵌套配置段默认值（兼容旧版配置升级，逐字段补齐缺失项）
+    _merge_providers_config(config)
+    for section in _SECTIONS_TO_MERGE:
+        _merge_config_section(config, section)
+    _merge_notification_templates(config)
+
+    # 环境变量覆盖（优先级最高）
+    _apply_env_overrides(config)
+
     return config
 
 

@@ -80,6 +80,28 @@ def test_custom_provider_key_allowed():
     assert validate_config(config) == []
 
 
+def test_custom_provider_selectable():
+    # providers 中配置的自定义 provider 应可直接设为主 provider
+    config = _valid_config()
+    config["providers"]["my_llm"] = {
+        "api_key": "sk-xxx",
+        "base_url": "https://example.com/v1/chat/completions",
+        "model": "m1",
+        "thinking_param": None,
+        "max_tokens_field": "max_tokens",
+    }
+    config["provider"] = "my_llm"
+    config["fallback_providers"] = ["my_llm", "deepseek"]
+    assert validate_config(config) == []
+
+
+def test_unknown_fallback_provider_reports_error():
+    config = _valid_config()
+    config["fallback_providers"] = ["gpt"]
+    errors = validate_config(config)
+    assert any("fallback_providers[0]" in e and "取值非法" in e for e in errors)
+
+
 def test_custom_notification_template_allowed():
     config = _valid_config()
     config["notification"]["templates"]["my_custom"] = {

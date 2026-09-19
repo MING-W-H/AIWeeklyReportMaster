@@ -409,9 +409,7 @@ def main() -> int:
         logger.info("部门 %s 共 %d 名成员", args.dept, len(user_ids))
     elif args.userids:
         user_ids = [u.strip() for u in args.userids.split(",") if u.strip()]
-        if len(user_ids) > _MAX_USERS_PER_REQUEST:
-            logger.error("单次最多查询 %d 人", _MAX_USERS_PER_REQUEST)
-            return 1
+        # 无需限制人数：_fetch_attendance 内部已按 _MAX_USERS_PER_REQUEST 分批请求
         names = resolve_user_names(config, user_ids)
         found = [u for u in user_ids if names.get(u)]
         if found:
