@@ -29,6 +29,13 @@
       "model": "qwen3.8-max-preview",
       "thinking_param": null,
       "max_tokens_field": "max_tokens"
+    },
+    "volc_glm": {
+      "api_key": "",
+      "base_url": "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+      "model": "glm-5.3",
+      "thinking_param": null,
+      "max_tokens_field": "max_tokens"
     }
   },
   "excel_folder": "./excel_files",
@@ -122,5 +129,13 @@
     "skip_holiday": true,
     "conversation_id": "",
     "remind_user_ids": []
+  },
+  "chatbot": {
+    "enabled": false,
+    "system_prompt": "你是公司的 AI 周报机器人，由公司内部开发，服务于员工。你可以回答与周报系统、CRM 工时填写、公司日常事务等相关的各类问题。\n\n行为准则：\n1. 使用简体中文回答，语言专业、简洁、友好\n2. 涉及不确定或不清楚的信息时，如实说明，不要编造\n3. 涉及个人隐私或公司机密的信息，礼貌地表示不便回答\n4. 回答先给结论再给理由，不要使用 Markdown 表格",
+    "allow_user_ids": [],
+    "max_history_turns": 10,
+    "max_reply_chars": 8000,
+    "reset_keywords": ["清空", "清空对话", "重置", "重置对话", "/clear"]
   }
 }

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """LLM API 调用模块。
 
-负责通过 OpenAI 兼容协议调用各 AI provider（minimax/deepseek/opencode/qwen），
+负责通过 OpenAI 兼容协议调用各 AI provider（minimax/deepseek/opencode/qwen/volc_glm），
 生成周报文本。包含详细的错误处理（HTTP 状态码、超时、网络异常等）。
 """
 from typing import Any, Dict, List, Tuple
@@ -461,15 +461,15 @@ def _call_llm_api_once(prompt: str, config: Dict[str, Any], provider_name: str) 
     _log_token_usage(usage)
 
     # 仅返回周报正文内容，不输出模型的思考过程
-    # 同时清理模型可能残留的对话式开头语（如"好的，根据您提供的数据..."）
-    return strip_chat_prefix(content)
+    # 先移除思考块（如 <think>...</think>），再清理模型可能残留的对话式开头语
+    return strip_chat_prefix(strip_thinking_block(content))
 
 
 def call_llm_api(prompt: str, config: Dict[str, Any]) -> str:
     """统一调用 LLM API (OpenAI 兼容协议)，主 provider 失败时自动切换备用 provider。
 
-    根据 config["provider"] 选择 minimax / deepseek / opencode / qwen，
-    可配置 fallback_providers 作为降级列表，主 provider 调用失败时依次尝试。
+    根据 config["provider"] 选择内置 provider（minimax/deepseek/opencode/qwen/volc_glm）
+    或 providers 中自定义的 provider，可配置 fallback_providers 作为降级列表，主 provider 调用失败时依次尝试。
     """
     provider_names = _resolve_provider_names(config)
     for i, provider_name in enumerate(provider_names):

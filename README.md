@@ -200,7 +200,8 @@ python weekly_report.py
     "minimax":   { "api_key": "", "base_url": "...", "model": "...", "thinking_param": {...}, "max_tokens_field": "..." },
     "deepseek":  { "api_key": "", "base_url": "...", "model": "...", "thinking_param": {...}, "max_tokens_field": "..." },
     "opencode":  { "api_key": "", "base_url": "...", "model": "...", "thinking_param": null,  "max_tokens_field": "..." },
-    "qwen":      { "api_key": "", "base_url": "...", "model": "...", "thinking_param": null,  "max_tokens_field": "..." }
+    "qwen":      { "api_key": "", "base_url": "...", "model": "...", "thinking_param": null,  "max_tokens_field": "..." },
+    "volc_glm":  { "api_key": "", "base_url": "...", "model": "...", "thinking_param": null,  "max_tokens_field": "..." }
   },
   "excel_folder": "./excel_files",
   "excel_extensions": [".xlsx", ".xls", ".xlsm"],
@@ -270,7 +271,7 @@ python weekly_report.py
 
 ## AI Provider 配置
 
-项目内置 4 家 AI 服务商，均使用 OpenAI 兼容协议，可自由切换。
+项目内置 5 家 AI 服务商，均使用 OpenAI 兼容协议，可自由切换。
 
 ### 支持的 Provider
 
@@ -280,6 +281,7 @@ python weekly_report.py
 | `deepseek` | `deepseek-v4-flash`   | `api.deepseek.com/chat/completions`                          | 支持（enabled）  | [DeepSeek 开放平台](https://platform.deepseek.com/)       |
 | `opencode` | `glm-5.2`             | `opencode.ai/zen/v1/chat/completions`                        | 不支持           | [OpenCode Zen](https://opencode.ai/)                      |
 | `qwen`     | `qwen3.8-max-preview` | `dashscope.aliyuncs.com/compatible-mode/v1/chat/completions` | 不支持           | [阿里云 DashScope](https://dashscope.console.aliyun.com/) |
+| `volc_glm` | `glm-5.3`             | `ark.cn-beijing.volces.com/api/v3/chat/completions`          | 不支持           | [火山方舟 Ark](https://console.volcengine.com/ark)       |
 
 ### 切换 Provider
 
@@ -299,6 +301,7 @@ python weekly_report.py
 python weekly_report.py --provider deepseek
 python weekly_report.py --provider opencode
 python weekly_report.py --provider qwen
+python weekly_report.py --provider volc_glm
 ```
 
 ### 环境变量（推荐用于 CI/CD）
@@ -311,6 +314,7 @@ $env:MINIMAX_API_KEY="sk-xxx"
 $env:DEEPSEEK_API_KEY="sk-xxx"
 $env:OPENCODE_API_KEY="sk-xxx"
 $env:QWEN_API_KEY="sk-xxx"
+$env:VOLC_GLM_API_KEY="sk-xxx"
 
 python weekly_report.py
 ```
@@ -1310,7 +1314,7 @@ register_weekly.ps1 (定时任务注册)
 │  Step 4: AI 优化（调用 LLM API）                             │
 │  ├─ System Prompt：周报助手人设 + 严格输出要求                │
 │  ├─ User Prompt：格式模板 + Excel 汇总文本                    │
-│  ├─ 支持 4 家 Provider：minimax/deepseek/opencode/qwen       │
+│  ├─ 支持 5 家 Provider：minimax/deepseek/opencode/qwen/volc_glm │
 │  ├─ 可选启用思考模式                                          │
 │  └─ 自动清理对话式前缀和重复输出                               │
 ├─────────────────────────────────────────────────────────────┤
